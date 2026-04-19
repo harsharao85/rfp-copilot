@@ -1,0 +1,15 @@
+{
+  "document_id": "lfb-06296ec4e584e5a8",
+  "question_text": "Which SSO protocols are supported?",
+  "answer_text": "We support SAML 2.0 and OIDC for customer-initiated SSO. SCIM 2.0 is supported for automated user provisioning. OAuth 2.0 Authorization Code + PKCE is used for native integrations. [sso_mfa_guide]",
+  "topic_ids": [
+    "sso",
+    "scim"
+  ],
+  "approved_by": "james.okafor@example.com",
+  "approved_at": "2026-02-03",
+  "expires_on": "2027-02-03",
+  "corroborated_by": [
+    "sso_mfa_guide"
+  ]
+}

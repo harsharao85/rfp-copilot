@@ -1,0 +1,13 @@
+{
+  "metadataAttributes": {
+    "document_id": "lfb-588e6d1774affb1e",
+    "source_type": "sme_approved_answer",
+    "topic_ids": [
+      "soc2"
+    ],
+    "approved_at": "2026-03-01",
+    "approved_by": "priya.sharma@example.com",
+    "expires_on": "2027-03-01",
+    "question_text": "What access controls govern internal access to customer data?"
+  }
+}

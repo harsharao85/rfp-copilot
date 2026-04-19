@@ -2,7 +2,7 @@
 
 **Owner:** H
 **Status:** Deployed + demo-ready
-**Last updated:** 2026-04-16
+**Last updated:** 2026-04-19 (post Phase F — single KB retrieval surface)
 **Audience:** AWS freshers. You know the cloud exists and have maybe spun up an EC2 instance, but "Step Functions" and "Bedrock Guardrails" are new words. This doc walks you through the system the way I'd walk a new hire through it on day one.
 
 ---
@@ -32,6 +32,8 @@ Before the walkthrough, here's a two-line intro to every service you'll see. Don
 | **API Gateway** | The front door for HTTP APIs. You give it URL patterns; it routes requests to Lambdas. | Exposes three HTTP APIs — one for upload, one for review, one that mocks external SaaS sources. |
 | **Bedrock** | AWS's managed LLM service. Call `invoke_model` and you get a response from Claude / Llama / Mistral / etc. Pay per token. | Runs Claude Sonnet 4.5 for answer generation and Claude Haiku 4.5 for classification. |
 | **Bedrock Guardrails** | A companion feature of Bedrock. You define "topics to block" and "PII to redact," and it filters model I/O. | Blocks any answer the model accidentally produces that mentions pricing, disparages competitors, or makes an unqualified compliance claim. |
+| **Bedrock Knowledge Bases** | Managed RAG — you point it at an S3 prefix, it chunks + embeds + indexes, and you call `Retrieve` with a text query + metadata filter. | The single retrieval surface. Chunks compliance PDFs, product-doc markdown, prior-RFP markdown, *and* SME-approved Q&A markdown with Titan Embed v2 (1024d) into S3 Vectors. Returns filtered passages to the retriever Lambda, discriminated by `source_type` metadata. The H signal is driven by a separate KB query filtered to `sme_approved_answer`. |
+| **S3 Vectors** | A cheap vector store that hangs off S3, billed by storage + query. ~$5/month at demo scale vs. ~$350/month for OpenSearch Serverless. | Backing store for the Knowledge Base's embeddings. |
 | **CloudFront** | AWS's CDN (content delivery network). Caches your static files at edge locations worldwide. | Serves the upload and review web pages fast + provides HTTPS for our custom domain. |
 | **ACM** (Certificate Manager) | Free SSL/TLS certificates. | Gives our domain a valid HTTPS cert. |
 | **KMS** (Key Management Service) | Managed encryption keys. | Encrypts every S3 bucket and DynamoDB table with customer-managed keys. |
@@ -95,9 +97,9 @@ flowchart TB
     end
 
     subgraph Sources["The knowledge the system draws on"]
-        RefCorpus[(S3 Reference Corpus<br/>compliance/ · product-docs/)]
+        KB[Bedrock Knowledge Base<br/>Titan Embed v2 · S3 Vectors<br/>filter by source_type]
+        RefCorpus[(S3 Reference Corpus<br/>compliance/*.pdf · product-docs/*.md<br/>prior-rfps/*.md · sme-approved/*.md)]
         CustRefs[(DynamoDB CustomerRefs<br/>public_reference + expiry)]
-        Library[(DynamoDB LibraryFeedback<br/>SME-approved Q&A)]
     end
 
     subgraph State["Where state + outputs live"]
@@ -115,9 +117,9 @@ flowchart TB
     UploadAPI -->|StartExecution| Parser
     Parser --> Map
     Map --> Classify --> Retrieve --> Generate --> Score --> Rules
-    Retrieve -.queries.-> RefCorpus
+    Retrieve -.Retrieve API.-> KB
+    KB -.indexes.-> RefCorpus
     Retrieve -.queries.-> CustRefs
-    Retrieve -.queries.-> Library
     Retrieve -.queries.-> MockAPI
     Rules --> Gate
     Gate -->|all green| Writer
@@ -201,7 +203,7 @@ flowchart LR
 
 **Classify** uses Claude Haiku (the small, fast Claude) to tag the question with topics like `soc2`, `encryption_at_rest`, `pricing`. Why Haiku and not Sonnet? Classification is a simpler task; Haiku is ~10× cheaper and ~3× faster. Rule of thumb: use the smallest model that's accurate enough.
 
-**Retrieve** looks up relevant documents from the knowledge sources. This is where a lot of the interesting logic lives — see §5.
+**Retrieve** looks up relevant documents from the knowledge sources. For the four S3-backed sources (compliance, product-docs, prior-rfps, sme-approved) it calls `bedrock-agent-runtime:Retrieve` against a single Bedrock Knowledge Base, passing a metadata filter (`source_type = compliance_cert | product_doc | prior_rfp | sme_approved_answer`) so one KB serves every retrieval path — primary passages, phrasing-reference priors, *and* the SME-approved Q&A that feeds the H signal. The H signal is a real cosine similarity now, not a topic-tag heuristic. Customer-refs are a straight DynamoDB scan. This is where a lot of the interesting logic lives — see §5.
 
 **Generate** calls Claude Sonnet with the retrieved passages and the question, asking for an answer with citations.
 
@@ -351,7 +353,7 @@ flowchart LR
 ```
 
 Reading the signals:
-- **H (0.45)** — how closely does an SME-approved prior answer match this question? This is the biggest lever because an SME has literally signed off on similar content before.
+- **H (0.45)** — how closely does an SME-approved prior answer match this question, measured as cosine similarity between the incoming question's embedding and the best-matching entry in the `sme_approved_answer` slice of the KB. This is the biggest lever because an SME has literally signed off on similar content before. (Phase F note: before Phase F this was a fake 0.82 whenever any topic tag overlapped — it's a real semantic score now, 0.4–0.95 in practice.)
 - **R (0.25)** — how strong is the retrieval? If the classifier said "soc2" and the retriever returned five SOC-2-related passages, R is high. If it returned zero, R is low.
 - **C (0.15)** — coverage across sources. An answer citing three different sources is more trustworthy than one citing one.
 - **F (0.10)** — freshness. How recently was the retrieved evidence updated?
@@ -421,13 +423,13 @@ flowchart TB
     style Stale fill:#ffe4b5,stroke:#8b4513
 ```
 
-Two things happen every time an SME approves an amber/red answer:
+Two things happen every time an SME approves an amber/red answer (Phase F — the flywheel now runs entirely through the Bedrock KB; LibraryFeedback DynamoDB is gone):
 
-1. **The approved Q&A joins LibraryFeedback.** Next time a similar question comes up, the H signal (prior similarity) lights up for it, pushing the next answer closer to green. *This* is the flywheel — more approvals → more greens → less SME work.
+1. **The approved Q&A is written to S3 as markdown + Bedrock metadata sidecar** (`sme-approved/<id>.md` + `<id>.md.metadata.json`, with `source_type=sme_approved_answer`, `approved_by`, `approved_at`, `expires_on`, `corroborated_by`). The Review API Lambda then calls `bedrock-agent:StartIngestionJob` to fold the new entry into the KB. The approval becomes semantically retrievable in ~1–3 minutes (the ingestion cycle). Next time a similar question comes up, the H signal (now a *real cosine similarity* from the KB, not a fake 0.82 or topic-tag overlap) lights up for it, pushing the next answer closer to green. *This* is the flywheel — more approvals → more greens → less SME work.
 
-2. **We record *which Primary source corroborated the approval*.** If the SOC 2 answer was approved when `soc2_cert_2025.pdf` had `updated_at = 2025-10-01`, we remember that. Later, when someone uploads `soc2_cert_2026.pdf` with `updated_at = 2026-03-15`, the **staleness daemon** (a separate Lambda that runs daily and on-demand) notices the corroborating source has moved. It flags the old approval as `corroboration_stale`. Stale approvals drop out of the H signal until someone re-approves them against the new source.
+2. **Freshness suppression runs at query time, uniformly across prior-RFPs and SME-approved entries.** The retriever's `_apply_freshness_suppression` compares each approved answer's `approved_at` against the `updated_at` of every Primary source it corroborated. If a newer Primary exists, the approved answer is suppressed from the H signal for that query. No out-of-band staleness daemon; no deferred flag propagation. One retrieval surface, one freshness rule.
 
-**This is what "library self-cleaning" means.** Approvals have a shelf life tied to the documents that justified them. The library can't silently rot into "SOC 2 answers from two generations ago" because the anti-decay mechanism is built in.
+**This is what "library self-cleaning" means.** Approvals have a shelf life tied to the documents that justified them. The library can't silently rot into "SOC 2 answers from two generations ago" because the anti-decay mechanism is built into every retrieval.
 
 ---
 
@@ -437,9 +439,10 @@ We picked five sources to demonstrate *five different AWS integration patterns*.
 
 | Source | Simulated as | The AWS pattern it shows you |
 |---|---|---|
-| Compliance store | `s3://…/compliance/*.json` — SOC 2, ISO 27001, FedRAMP sidecars | Small, high-authority, freshness-critical document store |
-| Product docs | `s3://…/product-docs/*.json` — encryption, DR, SSO/MFA | Medium-corpus feature documentation |
-| SME-approved Q&A | DynamoDB `LibraryFeedback` | NoSQL table with TTL-like freshness gating |
+| Compliance store | `s3://…/compliance/*.pdf` — SOC 2, ISO 27001, FedRAMP PDFs, indexed by Bedrock KB | Small, high-authority, freshness-critical document store |
+| Product docs | `s3://…/product-docs/*.md` — encryption, DR, SSO/MFA long-form markdown, same KB | Medium-corpus feature documentation |
+| Prior RFPs | `s3://…/prior-rfps/*.md` — phrasing reference only, same KB, freshness-suppressed | Secondary source gated by the freshness rule |
+| SME-approved Q&A | `s3://…/sme-approved/*.md` — SME-signed Q&A, same KB, drives the H signal via real cosine similarity | Semantic self-cleaning library — KB indexed, freshness-suppressed |
 | Customer References | DynamoDB `CustomerRefs` with `public_reference`, `approval_expires`, `industry` | Fast key-value lookup; the hard-rule gate |
 | Seismic + Gong | **Single** `mock_sources` Lambda behind API Gateway (`/seismic/content`, `/gong/calls`) | External SaaS REST API — OAuth-style header, simulated latency, simulated rate limits |
 
@@ -467,6 +470,7 @@ The demo is deliberately small. Here's the production scale-up path you'd hand t
 
 | When this happens | Do this |
 |---|---|
+| Sustained retrieval QPS above ~5 req/s, or corpus >~100k docs | Move the KB storage from **S3 Vectors** to **OpenSearch Serverless** (`AOSS`) — richer filter syntax, no per-doc metadata cap, sub-100ms tail latency. Base cost jumps from ~$5/mo to ~$350/mo minimum. |
 | > 10 source systems | Replace mock APIs with **Amazon Kendra** + its native connectors (Slack, Confluence, SharePoint, etc.) |
 | Multi-hop graph queries ("SMEs two hops from this topic") | Promote CustomerRefs + LibraryFeedback to **Neptune Serverless** |
 | Strict data residency / ACL inheritance needed | Add **VPC + PrivateLink**, enable Kendra ACLs, move to **IAM Identity Center** |
@@ -571,7 +575,7 @@ flowchart TB
     style DDB fill:#ffe4b5
 ```
 
-**Five CDK stacks:** `storage` · `data` · `orchestration` · `observability` · `static-site`.
+**Six CDK stacks:** `storage` · `data` · `knowledge-base` · `orchestration` · `observability` · `static-site`. The `knowledge-base` stack owns the S3 Vectors bucket + index, the Bedrock KB + data source, and the KB service role (with `kms:Decrypt` on the reference corpus CMK — without that grant, ingestion silently scans zero documents). The `data` stack holds four DynamoDB tables: Jobs, Questions, Reviews, CustomerRefs. The former LibraryFeedback table was removed in Phase F — SME-approved Q&A are now stored as markdown in S3 and indexed by the KB alongside everything else.
 
 Why five stacks and not one? Each stack is a CloudFormation template under the hood. Keeping them separate means you can deploy the UI (`static-site`) without also redeploying all twelve Lambdas (`orchestration`). Shorter deploy cycles → faster iteration. Stacks reference each other through public-readonly fields on the CDK constructs — CDK resolves the cross-stack dependencies at synth time.
 
@@ -582,9 +586,10 @@ Why five stacks and not one? Each stack is a CloudFormation template under the h
 | Mode | Cost |
 |---|---|
 | Running during a 1-hour demo | ~$3 (Bedrock usage + fixed infra) |
-| Running 24/7 | ~$120/month (no Kendra/Neptune; fixed costs are KMS, CloudWatch, DynamoDB minimums, CloudFront, ACM) |
+| Running 24/7 | ~$125/month (no Kendra/Neptune; fixed costs are KMS, CloudWatch, DynamoDB minimums, CloudFront, ACM, plus ~$5/mo S3 Vectors for the KB) |
 | Deploy + demo + destroy cycle | ~$4 per cycle |
 | Per-RFP variable cost (30 questions) | ~$1 in Bedrock tokens; negligible for everything else |
+| KB ingestion (one-time per corpus rev) | A few cents of Titan Embed v2 calls for ~16 chunks; re-runs only when corpus changes |
 
 **The cost strategy: destroy the stack between demos.** `npx cdk destroy --all` tears it down; `npx cdk deploy --all` brings it back in ~5 minutes. When you're not running a demo, you pay almost nothing. This is the core AWS serverless promise — idle resources should be free. That you can genuinely act on it (unlike EC2, where you still pay for the instance sitting idle) is the whole reason we built on Lambda and DynamoDB instead of EC2 and RDS.
 
@@ -656,6 +661,14 @@ Real deployment lessons from 2026-04-16. Each one cost me at least an hour; read
 **CustomerRefs key casing.** The CDK-created DynamoDB table uses `customerId` (camelCase) as its partition key. The source JSON at `data/graph/customers.json` uses `customer_id` (snake_case). The seeder remaps it. If you write a new loader, follow suit or you'll see `ValidationException: The provided key element does not match the schema`.
 
 **Guardrail input vs output.** The generator handler calls `check_output()` from `shared/bedrock_client.py` *after* generation. The inline `guardrailIdentifier` parameter on `invoke_model` was removed deliberately — leaving it in blocks legitimate pricing/compliance questions at the input stage and silently corrupts the demo. If you ever see "Input contains content that cannot be processed," that's what happened.
+
+**Bedrock KB on S3 Vectors: non-filterable keys are required.** S3 Vectors caps filterable metadata per vector at 2048 bytes. Bedrock KB stores the chunk text under `AMAZON_BEDROCK_TEXT` and chunk context under `AMAZON_BEDROCK_METADATA` — both easily exceed 2048 bytes on normal 300-token chunks. Mark both keys as non-filterable in the index's `metadataConfiguration.nonFilterableMetadataKeys` so they don't count toward the budget (they stay retrievable — just not usable in filter expressions, which you'd never want for raw chunk text anyway). Symptom if you miss this: ingestion "completes" with `numberOfDocumentsFailed` far exceeding `numberOfNewDocumentsIndexed`, and the job's `failureReasons` say *"Filterable metadata must have at most 2048 bytes."*
+
+**Hardcoded CFN physical names fight replacement.** `AWS::S3Vectors::Index` `indexName` and `AWS::Bedrock::KnowledgeBase` `name` are account-scoped unique. If you hardcode them and later change a property that requires replacement (like the index's `metadataConfiguration`), CFN's default order — create-new-then-delete-old — fails with `AlreadyExists`. Fix: omit `indexName` entirely so CFN auto-generates (supported by `CfnIndex`); for the KB, keep `name` but include a manual version suffix you bump when an immutable property changes (`rfp-copilot-corpus-kb-v2`, `-v3`, …). Ugly but unavoidable for resources with required unique names.
+
+**Cross-stack export blocks in-place replacement.** When the KB is replaced, the `ExportsOutput...KnowledgeBaseId` value needs to change, but CFN refuses to update an export that's currently imported by another stack (`Cannot update export ... as it is in use by rfp-copilot-dev-orchestration`). Workaround is a three-deploy dance: (1) edit `bin/app.ts` to pass the current KB id/arn as *literal strings* to orchestration and redeploy it — this breaks the import; (2) deploy the KB stack — now unblocked to replace; (3) revert `bin/app.ts` to reference `knowledgeBase.knowledgeBaseId` and redeploy orchestration to pick up the new KB.
+
+**KB replacement can orphan the old DataSource.** During the CFN replacement sequence the old VectorIndex gets deleted before the old DataSource, and the DS then can't delete its own vector-store data ("Unable to delete data from vector store"). CFN abandons the DS + its parent KB. Fix it manually: `aws bedrock-agent update-data-source ... --data-deletion-policy RETAIN`, then `delete-data-source`, then `delete-knowledge-base`. Cheap (empty orphan KBs are ~free) but noisy in the console — clean up after any KB replacement.
 
 ---
 

@@ -62,8 +62,10 @@ def main() -> None:
                 "customerId": c["customer_id"],
                 "name": c["name"],
                 "industry": c["industry"],
-                # DynamoDB FilterExpression uses eq("true") string comparison (see retriever)
-                "public_reference": "true" if c["public_reference"] else "false",
+                # Stored as BOOLEAN — retriever's FilterExpression uses eq(True).
+                # Prior versions of this seeder wrote strings; the retriever was
+                # fixed in Phase F to match the boolean storage.
+                "public_reference": bool(c["public_reference"]),
                 "approval_expires": c["approval_expires"] or "",
             }
             batch.put_item(Item=item)

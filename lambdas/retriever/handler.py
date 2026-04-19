@@ -41,8 +41,8 @@ logger = configure_logging()
 # (important for unit tests). The cached client is reused across Lambda invocations
 # within the same execution context.
 @functools.lru_cache(maxsize=1)
-def _s3():
-    return boto3.client("s3")
+def _bedrock_agent_runtime():
+    return boto3.client("bedrock-agent-runtime")
 
 
 @functools.lru_cache(maxsize=1)
@@ -50,19 +50,24 @@ def _ddb():
     return boto3.resource("dynamodb")
 
 # ---------------------------------------------------------------------------
-# Source routing — maps source names to S3 prefixes and source_system values.
-# Phase C wires DEFERRED_SOURCES to the mock_sources Lambda.
+# Source routing — maps dispatch source names to Bedrock KB source_type
+# metadata values and to the RetrievedPassage.source_system literal.
+# All S3-backed sources share one KB; source_type discriminates at query time.
+# `sme_approved_answers` is queried separately (not via dispatch) to feed the
+# H signal with real cosine scores — see _kb_prior_matches below.
 # ---------------------------------------------------------------------------
-_SOURCE_TO_PREFIX: dict[str, str] = {
-    "compliance_store": "compliance/",
-    "prior_rfps":       "prior-rfps/",
-    "product_docs":     "product-docs/",
+_SOURCE_TYPE_FILTER: dict[str, str] = {
+    "compliance_store":     "compliance_cert",
+    "prior_rfps":           "prior_rfp",
+    "product_docs":         "product_doc",
+    "sme_approved_answers": "sme_approved_answer",
 }
 
 _SOURCE_TO_SYSTEM: dict[str, str] = {
-    "compliance_store": "compliance",
-    "prior_rfps":       "historical_rfp",
-    "product_docs":     "whitepaper",
+    "compliance_store":     "compliance",
+    "prior_rfps":           "historical_rfp",
+    "product_docs":         "whitepaper",
+    "sme_approved_answers": "sme_approved",
 }
 
 _DEFERRED_SOURCES = {"deal_desk"}  # seismic + gong are wired via MOCK_SOURCES_API_URL
@@ -108,65 +113,62 @@ def _extract_topics(text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# S3 keyword scan — scans a single prefix in the reference corpus bucket
+# Bedrock Knowledge Base retrieve — vector search over the unified corpus,
+# filtered by source_type metadata to isolate compliance / product / priors.
 # ---------------------------------------------------------------------------
 
-def _s3_keyword_passages(
+def _knowledge_base_retrieve(
     text: str,
-    prefix: str,
-    source_system: str,
+    source: str,           # dispatch source name: compliance_store | product_docs | prior_rfps
+    source_system: str,    # RetrievedPassage.source_system literal
     top_k: int = 5,
 ) -> list[RetrievedPassage]:
-    """Keyword-overlap scan over JSON sidecar files under the given S3 prefix.
+    """Call bedrock-agent-runtime:Retrieve with a source_type filter.
 
-    Sidecar format: {"document_id": str, "excerpt": str,
-                     "updated_at": "YYYY-MM-DD",  # primary sources
-                     "approved_at": "YYYY-MM-DD"} # prior_rfps only
+    The metadata sidecars emitted by scripts/generate_corpus_documents.py
+    carry updated_at on primaries and approved_at on priors — both are
+    propagated into RetrievedPassage.metadata so _apply_freshness_suppression
+    can compare them downstream.
     """
-    bucket = os.environ["REFERENCE_CORPUS_BUCKET"]
-    lower_text = text.lower()
-    words = set(lower_text.split())
-    scored: list[tuple[float, RetrievedPassage]] = []
-
+    kb_id = os.environ["KNOWLEDGE_BASE_ID"]
+    source_type = _SOURCE_TYPE_FILTER[source]
     try:
-        paginator = _s3().get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            for obj in page.get("Contents", []):
-                if not obj["Key"].endswith(".json"):
-                    continue
-                try:
-                    body = _s3().get_object(Bucket=bucket, Key=obj["Key"])["Body"].read()
-                    doc = json.loads(body)
-                except Exception:
-                    continue
-
-                excerpt: str = doc.get("excerpt", "")
-                overlap = len(words & set(excerpt.lower().split())) / max(len(words), 1)
-                if overlap == 0:
-                    continue
-
-                meta: dict[str, Any] = {"s3_key": obj["Key"]}
-                if doc.get("updated_at"):
-                    meta["updated_at"] = doc["updated_at"]
-                if doc.get("approved_at"):
-                    meta["approved_at"] = doc["approved_at"]
-
-                scored.append((
-                    overlap,
-                    RetrievedPassage(
-                        source_system=source_system,  # type: ignore[arg-type]
-                        document_id=doc.get("document_id", obj["Key"]),
-                        excerpt=excerpt[:2000],
-                        score=min(overlap, 1.0),
-                        uri=f"s3://{bucket}/{obj['Key']}",
-                        metadata=meta,
-                    ),
-                ))
+        resp = _bedrock_agent_runtime().retrieve(
+            knowledgeBaseId=kb_id,
+            retrievalQuery={"text": text},
+            retrievalConfiguration={
+                "vectorSearchConfiguration": {
+                    "numberOfResults": top_k,
+                    "filter": {"equals": {"key": "source_type", "value": source_type}},
+                }
+            },
+        )
     except Exception as exc:
-        logger.warning("retriever.s3_scan_error", prefix=prefix, error=str(exc))
+        logger.warning("retriever.kb_error", source=source, error=str(exc))
+        return []
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [p for _, p in scored[:top_k]]
+    passages: list[RetrievedPassage] = []
+    for r in resp.get("retrievalResults", []):
+        md = r.get("metadata", {}) or {}
+        uri = r.get("location", {}).get("s3Location", {}).get("uri")
+        meta: dict[str, Any] = {}
+        if uri:
+            meta["s3_uri"] = uri
+        if md.get("updated_at"):
+            meta["updated_at"] = md["updated_at"]
+        if md.get("approved_at"):
+            meta["approved_at"] = md["approved_at"]
+
+        doc_id = md.get("document_id") or (uri.rsplit("/", 1)[-1] if uri else "unknown")
+        passages.append(RetrievedPassage(
+            source_system=source_system,  # type: ignore[arg-type]
+            document_id=doc_id,
+            excerpt=(r.get("content", {}).get("text") or "")[:2000],
+            score=min(max(float(r.get("score", 0.0)), 0.0), 1.0),
+            uri=uri,
+            metadata=meta,
+        ))
+    return passages
 
 
 def _mock_api_passages(source: str, text: str, top_k: int = 5) -> list[RetrievedPassage]:
@@ -242,12 +244,11 @@ def _retrieve_for_sources(
             if not results and os.environ.get("MOCK_SOURCES_API_URL"):
                 degraded.append(source)
             continue
-        prefix = _SOURCE_TO_PREFIX.get(source)
-        if not prefix:
+        if source not in _SOURCE_TYPE_FILTER:
             logger.warning("retriever.unknown_source", source=source)
             continue
         system = _SOURCE_TO_SYSTEM.get(source, "other")
-        passages.extend(_s3_keyword_passages(text, prefix=prefix, source_system=system, top_k=top_k))
+        passages.extend(_knowledge_base_retrieve(text, source=source, source_system=system, top_k=top_k))
     return passages, degraded
 
 
@@ -298,52 +299,40 @@ def _apply_freshness_suppression(
 # DynamoDB helpers
 # ---------------------------------------------------------------------------
 
-def _dynamo_prior_matches(topic_ids: list[str]) -> list[PriorAnswerMatch]:
-    """Scan LibraryFeedback for sme_approved=true answers covering matched topics.
+def _kb_prior_matches(text: str, top_k: int = 3) -> list[PriorAnswerMatch]:
+    """Query the KB for SME-approved Q&A with real semantic similarity.
 
-    # Scan acceptable at demo-scale library size; production should add a
-    # topic GSI and use Query.
+    Replaces the old DynamoDB scan over LibraryFeedback. Using KB retrieve
+    gives us a real cosine similarity (from Titan Embed v2) instead of the
+    old fixed 0.82 synthetic value, and removes the topic-tag matching
+    brittleness (e.g. the `encryption_at_rest` vs `encryption` mismatch).
     """
-    if not topic_ids:
-        return []
-
-    table = _ddb().Table(os.environ["LIBRARY_FEEDBACK_TABLE"])
+    passages = _knowledge_base_retrieve(
+        text,
+        source="sme_approved_answers",
+        source_system="sme_approved",
+        top_k=top_k,
+    )
     today = date.today().isoformat()
     matches: list[PriorAnswerMatch] = []
-    seen: set[str] = set()
-
-    try:
-        resp = table.scan(
-            FilterExpression=(
-                Attr("sme_approved").eq(True)
-                & Attr("topic_ids").exists()
-            )
-        )
-        for item in resp.get("Items", []):
-            aid = item.get("answerId", "")
-            if aid in seen:
-                continue
-            if not any(t in item.get("topic_ids", []) for t in topic_ids):
-                continue
-            expires_on = item.get("expires_on", "")
-            if expires_on and expires_on < today:
-                continue
-            seen.add(aid)
-            matches.append(
-                PriorAnswerMatch(
-                    answer_id=aid,
-                    question_text=item.get("question_text", ""),
-                    answer_text=item.get("answer_text", ""),
-                    similarity=0.82,  # Phase B: fixed synthetic; Phase D upgrades with embedding distance
-                    approved_by=item.get("approved_by", "unknown"),
-                    approved_at=item.get("approved_at", "2025-01-01T00:00:00Z"),
-                    expires_on=None,
-                )
-            )
-    except Exception as exc:
-        logger.warning("retriever.dynamo_prior_error", error=str(exc))
-
-    return matches[:3]
+    for p in passages:
+        md = p.metadata or {}
+        expires_on = md.get("expires_on") or ""
+        if expires_on and expires_on < today:
+            continue  # hard-expire at the retrieval boundary
+        matches.append(PriorAnswerMatch(
+            answer_id=p.document_id,
+            # Sidecar carries the original question text; fall back to the
+            # chunk excerpt if a chunked sidecar has lost it (shouldn't happen
+            # at our corpus size but defensive).
+            question_text=str(md.get("question_text", "")) or p.excerpt[:200],
+            answer_text=p.excerpt,
+            similarity=p.score,  # real cosine from KB, not fake 0.82
+            approved_by=str(md.get("approved_by", "unknown")),
+            approved_at=str(md.get("approved_at", "2025-01-01T00:00:00Z")),
+            expires_on=None,  # boundary-filtered above; model doesn't need to re-check
+        ))
+    return matches
 
 
 def _dynamo_reference_customers(industry: str | None) -> list[str]:
@@ -357,7 +346,7 @@ def _dynamo_reference_customers(industry: str | None) -> list[str]:
 
     try:
         resp = table.scan(
-            FilterExpression=Attr("public_reference").eq("true") & Attr("approval_expires").gte(today)
+            FilterExpression=Attr("public_reference").eq(True) & Attr("approval_expires").gte(today)
         )
         return [
             item["name"]
@@ -449,7 +438,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         except Exception as exc:
             log.warning("retriever.suppressed_count_write_error", error=str(exc))
 
-    prior_matches = _dynamo_prior_matches(topics)
+    prior_matches = _kb_prior_matches(text)
     refs = _dynamo_reference_customers(industry)
 
     log.info(

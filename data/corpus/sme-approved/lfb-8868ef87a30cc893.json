@@ -1,0 +1,14 @@
+{
+  "document_id": "lfb-8868ef87a30cc893",
+  "question_text": "Describe your DR capabilities and RTO/RPO targets.",
+  "answer_text": "The platform is deployed active-active across two AWS regions. Critical metadata uses synchronous replication; bulk data uses asynchronous replication with a lag under 60 seconds. Target RTO is under four hours; target RPO is under fifteen minutes. DR exercises are conducted twice annually. [dr_bcp_overview]",
+  "topic_ids": [
+    "dr_bcp"
+  ],
+  "approved_by": "sarah.chen@example.com",
+  "approved_at": "2026-01-20",
+  "expires_on": "2027-01-20",
+  "corroborated_by": [
+    "dr_bcp_overview"
+  ]
+}

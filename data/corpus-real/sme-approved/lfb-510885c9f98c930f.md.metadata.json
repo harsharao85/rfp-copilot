@@ -1,0 +1,14 @@
+{
+  "metadataAttributes": {
+    "document_id": "lfb-510885c9f98c930f",
+    "source_type": "sme_approved_answer",
+    "topic_ids": [
+      "dpa",
+      "gdpr"
+    ],
+    "approved_at": "2026-02-20",
+    "approved_by": "sam.okafor@example.com",
+    "expires_on": "2027-02-20",
+    "question_text": "Provide your Data Processing Agreement and list of sub-processors."
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "metadataAttributes": {
+    "document_id": "lfb-af7680fbd2363399",
+    "source_type": "sme_approved_answer",
+    "topic_ids": [
+      "incident_response",
+      "soc2"
+    ],
+    "approved_at": "2026-03-01",
+    "approved_by": "priya.sharma@example.com",
+    "expires_on": "2027-03-01",
+    "question_text": "Describe your incident response process."
+  }
+}

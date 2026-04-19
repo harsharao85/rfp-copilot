@@ -40,7 +40,8 @@ class Question(BaseModel):
 
 class RetrievedPassage(BaseModel):
     source_system: Literal[
-        "historical_rfp", "whitepaper", "seismic", "gong", "cms", "confluence", "compliance", "other"
+        "historical_rfp", "whitepaper", "seismic", "gong", "cms", "confluence",
+        "compliance", "sme_approved", "other"
     ]
     document_id: str
     excerpt: str

@@ -1,0 +1,15 @@
+{
+  "document_id": "lfb-0cabfd4b7dfa872f",
+  "question_text": "How is customer data encrypted at rest?",
+  "answer_text": "All customer data is encrypted at rest using AES-256-GCM. Keys are managed by AWS KMS with automatic annual rotation. Enterprise customers may supply their own CMK (BYOK) via an AWS KMS key policy in their own account. [encryption_whitepaper]",
+  "topic_ids": [
+    "encryption_at_rest",
+    "key_management"
+  ],
+  "approved_by": "sarah.chen@example.com",
+  "approved_at": "2026-01-15",
+  "expires_on": "2027-01-15",
+  "corroborated_by": [
+    "encryption_whitepaper"
+  ]
+}

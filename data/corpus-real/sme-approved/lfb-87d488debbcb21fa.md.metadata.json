@@ -1,0 +1,14 @@
+{
+  "metadataAttributes": {
+    "document_id": "lfb-87d488debbcb21fa",
+    "source_type": "sme_approved_answer",
+    "topic_ids": [
+      "mfa",
+      "sso"
+    ],
+    "approved_at": "2026-02-03",
+    "approved_by": "james.okafor@example.com",
+    "expires_on": "2027-02-03",
+    "question_text": "Is MFA supported and which factors?"
+  }
+}

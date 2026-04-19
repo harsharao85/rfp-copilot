@@ -1,0 +1,15 @@
+{
+  "document_id": "lfb-510885c9f98c930f",
+  "question_text": "Provide your Data Processing Agreement and list of sub-processors.",
+  "answer_text": "Our standard Data Processing Agreement incorporates the EU Standard Contractual Clauses and is available on the Trust Center. The public sub-processor list is maintained on our website and updated at least 30 days before any change; customers can subscribe to change notifications. Sub-processors are assessed annually against our third-party risk program.",
+  "topic_ids": [
+    "dpa",
+    "gdpr"
+  ],
+  "approved_by": "sam.okafor@example.com",
+  "approved_at": "2026-02-20",
+  "expires_on": "2027-02-20",
+  "corroborated_by": [
+    "soc2_cert_2025"
+  ]
+}

@@ -14,7 +14,6 @@ export class DataStack extends cdk.Stack {
   public readonly jobsTable: dynamodb.Table;
   public readonly questionsTable: dynamodb.Table;
   public readonly reviewsTable: dynamodb.Table;
-  public readonly libraryFeedbackTable: dynamodb.Table;
   public readonly customerRefsTable: dynamodb.Table;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -50,13 +49,9 @@ export class DataStack extends cdk.Stack {
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
-    this.libraryFeedbackTable = new dynamodb.Table(this, 'LibraryFeedbackTable', {
-      partitionKey: { name: 'answerId', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'version', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      stream: dynamodb.StreamViewType.NEW_IMAGE, // drives staleness daemon (Phase C)
-    });
+    // LibraryFeedback removed (Phase F): SME-approved Q&A moved to the
+    // Bedrock KB (source_type=sme_approved_answer) for unified semantic
+    // retrieval. See docs/architecture.md §5 / §8.
 
     // Replaces Neptune Customer vertices. Retriever uses this for hard-rule #4
     // (customer-name gating). Production: add a GSI on public_reference to avoid
@@ -70,7 +65,6 @@ export class DataStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'JobsTableName', { value: this.jobsTable.tableName });
     new cdk.CfnOutput(this, 'QuestionsTableName', { value: this.questionsTable.tableName });
     new cdk.CfnOutput(this, 'ReviewsTableName', { value: this.reviewsTable.tableName });
-    new cdk.CfnOutput(this, 'LibraryFeedbackTableName', { value: this.libraryFeedbackTable.tableName });
     new cdk.CfnOutput(this, 'CustomerRefsTableName', { value: this.customerRefsTable.tableName });
   }
 }

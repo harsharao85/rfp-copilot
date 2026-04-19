@@ -1,0 +1,11 @@
+{
+  "metadataAttributes": {
+    "document_id": "northwind_sso_answer",
+    "source_type": "prior_rfp",
+    "topic_ids": [
+      "sso",
+      "scim"
+    ],
+    "approved_at": "2026-01-15"
+  }
+}

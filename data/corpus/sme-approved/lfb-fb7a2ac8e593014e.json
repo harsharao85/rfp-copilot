@@ -1,0 +1,15 @@
+{
+  "document_id": "lfb-fb7a2ac8e593014e",
+  "question_text": "Where is customer data stored? Is data residency configurable?",
+  "answer_text": "Customer data is stored in the AWS region elected at tenant creation. Supported regions: us-east-1, us-west-2, eu-west-1, eu-central-1, ap-southeast-2. Data does not leave the elected region for operational purposes. Cross-region replication is available as an opt-in feature for disaster recovery. [dr_bcp_overview]",
+  "topic_ids": [
+    "data_residency",
+    "gdpr"
+  ],
+  "approved_by": "sam.okafor@example.com",
+  "approved_at": "2026-02-20",
+  "expires_on": "2027-02-20",
+  "corroborated_by": [
+    "dr_bcp_overview"
+  ]
+}

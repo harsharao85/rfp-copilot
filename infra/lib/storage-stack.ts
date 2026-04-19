@@ -18,6 +18,9 @@ export class StorageStack extends cdk.Stack {
   public readonly referenceCorpusBucket: s3.Bucket;
   public readonly outputBucket: s3.Bucket;
   public readonly auditBucket: s3.Bucket;
+  // Exposed so KnowledgeBaseStack can grant its service role kms:Decrypt
+  // on the corpus bucket's CMK — required for KB ingestion to succeed.
+  public readonly referenceKey: kms.IKey;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -31,6 +34,7 @@ export class StorageStack extends cdk.Stack {
       enableKeyRotation: true,
       description: 'CMK for reference corpus (historical RFPs, whitepapers)',
     });
+    this.referenceKey = referenceKey;
 
     const outputKey = new kms.Key(this, 'OutputKey', {
       enableKeyRotation: true,

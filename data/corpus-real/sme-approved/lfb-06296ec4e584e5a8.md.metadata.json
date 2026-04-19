@@ -1,0 +1,14 @@
+{
+  "metadataAttributes": {
+    "document_id": "lfb-06296ec4e584e5a8",
+    "source_type": "sme_approved_answer",
+    "topic_ids": [
+      "sso",
+      "scim"
+    ],
+    "approved_at": "2026-02-03",
+    "approved_by": "james.okafor@example.com",
+    "expires_on": "2027-02-03",
+    "question_text": "Which SSO protocols are supported?"
+  }
+}

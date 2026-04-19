@@ -8,6 +8,7 @@ Routes (HTTP API Gateway proxy format):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -22,6 +23,8 @@ from shared.logging_config import configure_logging
 logger = configure_logging()
 ddb = boto3.resource("dynamodb")
 sfn = boto3.client("stepfunctions")
+s3 = boto3.client("s3")
+bedrock_agent = boto3.client("bedrock-agent")
 
 CORS = {
     "Access-Control-Allow-Origin": "*",
@@ -110,24 +113,40 @@ def get_review(job_id: str) -> dict[str, Any]:
     })
 
 
-def _write_library_feedback(
+def _qa_markdown(
+    *, doc_id: str, approved_by: str, approved_at: str, topic_ids: list[str],
+    corroborated_by: list[str], question_text: str, answer_text: str,
+) -> str:
+    """Same shape as scripts/generate_corpus_documents.py's _generate_sme_approved."""
+    return (
+        f"# SME-Approved Q&A — {doc_id}\n\n"
+        f"**Approved:** {approved_by} on {approved_at}  \n"
+        f"**Topics:** {', '.join(topic_ids)}  \n"
+        f"**Corroborated by:** {', '.join(corroborated_by) or '—'}\n\n"
+        f"## Question\n\n{question_text.strip()}\n\n"
+        f"## Answer\n\n{answer_text.strip()}\n"
+    )
+
+
+def _emit_sme_approved_to_kb(
     job_id: str,
     approved_by: str,
     answer_map: dict[str, str],
-    now: str,
+    now_iso: str,
 ) -> None:
-    """Write LibraryFeedback entries for each SME-reviewed question.
-
-    Called after send_task_success so the execution is always resumed even if
-    this write fails. Failures are logged and swallowed — the flywheel is
-    best-effort for Phase D; a DDB stream or transactional write handles
-    durability in production.
+    """Write each SME-reviewed Q&A to S3 as markdown + Bedrock metadata sidecar,
+    then trigger a KB ingestion job. Fire-and-forget on the ingestion side — the
+    approval benefits future RFPs, not the in-flight one, so a ~1-3 minute
+    index lag is acceptable. Called *after* send_task_success so execution is
+    resumed even if this write fails.
     """
-    questions_table = ddb.Table(os.environ["QUESTIONS_TABLE"])
-    feedback_table = ddb.Table(os.environ["LIBRARY_FEEDBACK_TABLE"])
+    bucket = os.environ["REFERENCE_CORPUS_BUCKET"]
+    kb_id  = os.environ["KNOWLEDGE_BASE_ID"]
+    ds_id  = os.environ["DATA_SOURCE_ID"]
+    approved_at_date = now_iso[:10]  # sidecar uses ISO date for lexicographic compare
     expires_on = (datetime.now(timezone.utc) + timedelta(days=730)).date().isoformat()
 
-    # Paginate through all questions for this job
+    questions_table = ddb.Table(os.environ["QUESTIONS_TABLE"])
     items: list[Any] = []
     kwargs: dict[str, Any] = {"KeyConditionExpression": Key("jobId").eq(job_id)}
     while True:
@@ -143,22 +162,50 @@ def _write_library_feedback(
             continue
         qid = q["questionId"]
         answer_text = answer_map.get(qid) or q.get("answer_text", "")
-        if not answer_text:
+        question_text = q.get("text", "")
+        if not answer_text or not question_text:
             continue
-        feedback_table.put_item(Item={
-            "answerId": qid,
-            "version": now,
-            "question_text": q.get("text", ""),
-            "answer_text": answer_text,
-            "topic_ids": q.get("topic_ids", []),
-            "approved_at": now,
-            "approved_by": approved_by,
-            "sme_approved": True,
-            "corroborated_by": q.get("primary_passage_uris", []),
-            "expires_on": expires_on,
-        })
+        # Deterministic doc_id from question text so re-approvals overwrite
+        # prior version rather than accumulate duplicates in the KB.
+        doc_id = "lfb-" + hashlib.sha256(question_text.encode("utf-8")).hexdigest()[:16]
+        topic_ids = list(q.get("topic_ids", []))
+        corroborated_by = list(q.get("primary_passage_uris", []))
+
+        md_body = _qa_markdown(
+            doc_id=doc_id, approved_by=approved_by, approved_at=approved_at_date,
+            topic_ids=topic_ids, corroborated_by=corroborated_by,
+            question_text=question_text, answer_text=answer_text,
+        )
+        sidecar = {
+            "metadataAttributes": {
+                "document_id":   doc_id,
+                "source_type":   "sme_approved_answer",
+                "topic_ids":     topic_ids,
+                "approved_at":   approved_at_date,
+                "approved_by":   approved_by,
+                "expires_on":    expires_on,
+                "question_text": question_text[:500],  # cap for sidecar size safety
+            }
+        }
+        key = f"sme-approved/{doc_id}.md"
+        s3.put_object(Bucket=bucket, Key=key, Body=md_body.encode("utf-8"),
+                      ContentType="text/markdown")
+        s3.put_object(Bucket=bucket, Key=f"{key}.metadata.json",
+                      Body=json.dumps(sidecar).encode("utf-8"),
+                      ContentType="application/json")
         written += 1
-    logger.info("review_api.feedback_written", job_id=job_id, count=written)
+
+    if written:
+        try:
+            resp = bedrock_agent.start_ingestion_job(knowledgeBaseId=kb_id, dataSourceId=ds_id)
+            logger.info("review_api.ingestion_started", job_id=job_id,
+                        count=written, ingestion_job_id=resp["ingestionJob"]["ingestionJobId"])
+        except Exception as exc:
+            # Common case: another ingestion job is already running. The S3
+            # writes are durable — the next ingestion sweep will pick them up.
+            logger.warning("review_api.ingestion_trigger_deferred",
+                           job_id=job_id, count=written, error=str(exc))
+    logger.info("review_api.sme_approved_written", job_id=job_id, count=written)
 
 
 def approve(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -195,12 +242,14 @@ def approve(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
     )
     logger.info("review_api.approved", job_id=job_id, edits=len(edited))
 
-    # Flywheel write — best-effort after resuming execution
+    # Flywheel write — best-effort after resuming execution.
+    # Writes Q&A to S3 + triggers KB ingestion. Approved answers become
+    # semantically retrievable in ~1-3 min (next ingestion run).
     approved_by = body.get("approved_by", "sme")
     try:
-        _write_library_feedback(job_id, approved_by, answer_map, now)
+        _emit_sme_approved_to_kb(job_id, approved_by, answer_map, now)
     except Exception as exc:
-        logger.warning("review_api.feedback_write_error", job_id=job_id, error=str(exc))
+        logger.warning("review_api.sme_approved_write_error", job_id=job_id, error=str(exc))
 
     return _resp(200, {"status": "approved"})
 

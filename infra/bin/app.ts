@@ -3,6 +3,7 @@ import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { StorageStack } from '../lib/storage-stack';
 import { DataStack } from '../lib/data-stack';
+import { KnowledgeBaseStack } from '../lib/knowledge-base-stack';
 import { OrchestrationStack } from '../lib/orchestration-stack';
 import { ObservabilityStack } from '../lib/observability-stack';
 import { StaticSiteStack } from '../lib/static-site-stack';
@@ -26,16 +27,25 @@ const storage = new StorageStack(app, `${prefix}-storage`, { env });
 
 const data = new DataStack(app, `${prefix}-data`, { env });
 
+const knowledgeBase = new KnowledgeBaseStack(app, `${prefix}-knowledge-base`, {
+  env,
+  referenceCorpusBucket: storage.referenceCorpusBucket,
+  referenceKey: storage.referenceKey,
+});
+
 const orchestration = new OrchestrationStack(app, `${prefix}-orchestration`, {
   env,
   incomingBucket: storage.incomingBucket,
   outputBucket: storage.outputBucket,
   referenceCorpusBucket: storage.referenceCorpusBucket,
+  referenceKey: storage.referenceKey,
   jobsTable: data.jobsTable,
   questionsTable: data.questionsTable,
   reviewsTable: data.reviewsTable,
-  libraryFeedbackTable: data.libraryFeedbackTable,
   customerRefsTable: data.customerRefsTable,
+  knowledgeBaseId: knowledgeBase.knowledgeBaseId,
+  knowledgeBaseArn: knowledgeBase.knowledgeBaseArn,
+  dataSourceId: knowledgeBase.dataSourceId,
 });
 
 new ObservabilityStack(app, `${prefix}-observability`, {

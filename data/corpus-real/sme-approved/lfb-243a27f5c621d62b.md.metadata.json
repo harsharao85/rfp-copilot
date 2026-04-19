@@ -1,0 +1,13 @@
+{
+  "metadataAttributes": {
+    "document_id": "lfb-243a27f5c621d62b",
+    "source_type": "sme_approved_answer",
+    "topic_ids": [
+      "iso27001"
+    ],
+    "approved_at": "2026-03-10",
+    "approved_by": "priya.sharma@example.com",
+    "expires_on": "2027-03-10",
+    "question_text": "Are you ISO 27001 certified? Provide certificate number and validity."
+  }
+}

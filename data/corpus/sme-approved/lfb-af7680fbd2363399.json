@@ -1,0 +1,15 @@
+{
+  "document_id": "lfb-af7680fbd2363399",
+  "question_text": "Describe your incident response process.",
+  "answer_text": "Security incidents are triaged by our 24\u00d77 Security Operations Center within 15 minutes of detection. A named Incident Commander follows the NIST 800-61 framework. Customers affected by a confirmed security incident are notified within 72 hours with scope, impact, and remediation status. [soc2_cert_2025]",
+  "topic_ids": [
+    "incident_response",
+    "soc2"
+  ],
+  "approved_by": "priya.sharma@example.com",
+  "approved_at": "2026-03-01",
+  "expires_on": "2027-03-01",
+  "corroborated_by": [
+    "soc2_cert_2025"
+  ]
+}

@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -9,8 +10,6 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import * as events from 'aws-cdk-lib/aws-events';
-import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as python from '@aws-cdk/aws-lambda-python-alpha';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -35,11 +34,14 @@ export interface OrchestrationStackProps extends cdk.StackProps {
   readonly incomingBucket: s3.IBucket;
   readonly outputBucket: s3.IBucket;
   readonly referenceCorpusBucket: s3.IBucket;
+  readonly referenceKey: kms.IKey;
   readonly jobsTable: dynamodb.ITable;
   readonly questionsTable: dynamodb.ITable;
   readonly reviewsTable: dynamodb.ITable;
-  readonly libraryFeedbackTable: dynamodb.ITable;
   readonly customerRefsTable: dynamodb.ITable;
+  readonly knowledgeBaseId: string;
+  readonly knowledgeBaseArn: string;
+  readonly dataSourceId: string;
 }
 
 /**
@@ -121,13 +123,14 @@ export class OrchestrationStack extends cdk.Stack {
     const sharedEnv: Record<string, string> = {
       JOBS_TABLE: props.jobsTable.tableName,
       QUESTIONS_TABLE: props.questionsTable.tableName,
-      LIBRARY_FEEDBACK_TABLE: props.libraryFeedbackTable.tableName,
       CUSTOMER_REFS_TABLE: props.customerRefsTable.tableName,
       REFERENCE_CORPUS_BUCKET: props.referenceCorpusBucket.bucketName,
+      KNOWLEDGE_BASE_ID: props.knowledgeBaseId,
+      DATA_SOURCE_ID: props.dataSourceId,
       GUARDRAIL_ID: this.guardrailId,
       GUARDRAIL_VERSION: 'DRAFT',
       LOG_LEVEL: 'INFO',
-      SHARED_VERSION: '11',
+      SHARED_VERSION: '13',
       OUTPUT_BUCKET: props.outputBucket.bucketName,
     };
 
@@ -171,16 +174,15 @@ export class OrchestrationStack extends cdk.Stack {
 
     const parserFn = makeLambda('ParserFn', 'excel_parser', 60);
     const classifierFn = makeLambda('ClassifierFn', 'question_classifier');
-    const retrieverFn = makeLambda('RetrieverFn', 'retriever', 60);
+    const retrieverFn = makeLambda('RetrieverFn', 'retriever', 90);
     const generatorFn = makeLambda('GeneratorFn', 'generator', 90);
     const scorerFn = makeLambda('ScorerFn', 'confidence_scorer');
     const rulesFn = makeLambda('RulesFn', 'hard_rules');
     const writerFn = makeLambda('WriterFn', 'excel_writer', 60);
     const reviewGateFn = makeLambda('ReviewGateFn', 'review_gate', 30);
     const reviewApiFn = makeLambda('ReviewApiFn', 'review_api', 30);
-    // Phase C: mock sources + staleness daemon
+    // Mock sources (Seismic + Gong) behind a single Lambda
     const mockSourcesFn = makeLambda('MockSourcesFn', 'mock_sources');
-    const stalenessDaemonFn = makeLambda('StalenessDaemonFn', 'staleness_daemon', 60);
     // Task 1: upload API — presign, start, status, download
     const uploadApiFn = makeLambda('UploadApiFn', 'upload_api');
 
@@ -197,16 +199,18 @@ export class OrchestrationStack extends cdk.Stack {
     props.questionsTable.grantReadWriteData(rulesFn);
     props.questionsTable.grantReadData(writerFn);
 
-    props.referenceCorpusBucket.grantRead(retrieverFn);
     props.customerRefsTable.grantReadData(retrieverFn);
-    props.libraryFeedbackTable.grantReadData(retrieverFn);
     // UpdateItem only — retriever writes suppressed_prior_count to existing question items
     retrieverFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['dynamodb:UpdateItem'],
       resources: [props.questionsTable.tableArn],
     }));
-    props.libraryFeedbackTable.grantReadWriteData(stalenessDaemonFn);
-
+    // Bedrock Knowledge Base retrieve — replaces the S3 keyword scan for
+    // compliance / product_docs / prior_rfps sources.
+    retrieverFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:Retrieve'],
+      resources: [props.knowledgeBaseArn],
+    }));
     for (const fn of [retrieverFn, generatorFn, classifierFn, scorerFn]) {
       fn.addToRolePolicy(new iam.PolicyStatement({
         actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
@@ -332,6 +336,16 @@ export class OrchestrationStack extends cdk.Stack {
       actions: ['states:SendTaskSuccess', 'states:SendTaskFailure'],
       resources: ['*'],
     }));
+    // Flywheel: review_api writes SME-approved Q&A into the reference corpus
+    // bucket's sme-approved/ prefix and triggers a KB ingestion job. Needs
+    // S3 PutObject, KMS encrypt (the bucket is CMK-encrypted), and the
+    // bedrock-agent ingestion action.
+    props.referenceCorpusBucket.grantWrite(reviewApiFn);
+    props.referenceKey.grantEncryptDecrypt(reviewApiFn);
+    reviewApiFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:StartIngestionJob'],
+      resources: [props.knowledgeBaseArn],
+    }));
 
     // HTTP API for the review UI
     const httpApi = new apigatewayv2.HttpApi(this, 'ReviewHttpApi', {
@@ -349,11 +363,6 @@ export class OrchestrationStack extends cdk.Stack {
 
     this.reviewApiUrl = httpApi.apiEndpoint;
 
-    // Staleness on-demand trigger — lets the demo fire the sweep mid-session to show the
-    // mechanism live without waiting for the 2 AM EventBridge schedule.
-    const stalenessIntegration = new apigatewayv2Integrations.HttpLambdaIntegration('StalenessIntegration', stalenessDaemonFn);
-    httpApi.addRoutes({ path: '/admin/staleness/trigger', methods: [apigatewayv2.HttpMethod.POST], integration: stalenessIntegration });
-
     // Mock sources API — simulates Seismic + Gong behind a single Lambda.
     // 5% error rate + 10% tail latency are deliberate (see mock_sources/handler.py).
     const mockSourcesApi = new apigatewayv2.HttpApi(this, 'MockSourcesApi', {
@@ -365,13 +374,6 @@ export class OrchestrationStack extends cdk.Stack {
 
     // Wire the mock sources URL into the retriever so _mock_api_passages() can call it.
     retrieverFn.addEnvironment('MOCK_SOURCES_API_URL', mockSourcesApi.apiEndpoint);
-
-    // EventBridge daily schedule: staleness sweep at 2 AM UTC.
-    const stalenessSchedule = new events.Rule(this, 'StalenessSchedule', {
-      schedule: events.Schedule.cron({ hour: '2', minute: '0' }),
-      description: 'Daily LibraryFeedback staleness sweep',
-    });
-    stalenessSchedule.addTarget(new targets.LambdaFunction(stalenessDaemonFn));
 
     new cdk.CfnOutput(this, 'ReviewApiUrl', { value: this.reviewApiUrl });
     new cdk.CfnOutput(this, 'MockSourcesApiUrl', { value: mockSourcesApi.apiEndpoint });

@@ -1,0 +1,14 @@
+{
+  "document_id": "lfb-4d778996bf5cad56",
+  "question_text": "What are your backup procedures?",
+  "answer_text": "Automated daily snapshots of all customer data are retained for 35 days. Weekly snapshots are retained for 12 months. Cross-region replication copies each snapshot to the secondary region. Restore drills are performed quarterly. [dr_bcp_overview]",
+  "topic_ids": [
+    "dr_bcp"
+  ],
+  "approved_by": "sarah.chen@example.com",
+  "approved_at": "2026-01-20",
+  "expires_on": "2027-01-20",
+  "corroborated_by": [
+    "dr_bcp_overview"
+  ]
+}

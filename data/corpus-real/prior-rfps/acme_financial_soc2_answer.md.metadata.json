@@ -1,0 +1,10 @@
+{
+  "metadataAttributes": {
+    "document_id": "acme_financial_soc2_answer",
+    "source_type": "prior_rfp",
+    "topic_ids": [
+      "soc2"
+    ],
+    "approved_at": "2025-07-01"
+  }
+}

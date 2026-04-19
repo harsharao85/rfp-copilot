@@ -1,0 +1,15 @@
+{
+  "document_id": "lfb-87d488debbcb21fa",
+  "question_text": "Is MFA supported and which factors?",
+  "answer_text": "MFA is supported for all user tiers and can be enforced by administrator policy. Supported factors: TOTP authenticator apps, WebAuthn/FIDO2 hardware keys, and SMS (not recommended for high-assurance environments). Hardware keys are required for administrative roles in the Enterprise tier. [sso_mfa_guide]",
+  "topic_ids": [
+    "mfa",
+    "sso"
+  ],
+  "approved_by": "james.okafor@example.com",
+  "approved_at": "2026-02-03",
+  "expires_on": "2027-02-03",
+  "corroborated_by": [
+    "sso_mfa_guide"
+  ]
+}

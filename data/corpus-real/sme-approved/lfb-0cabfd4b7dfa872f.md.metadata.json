@@ -1,0 +1,14 @@
+{
+  "metadataAttributes": {
+    "document_id": "lfb-0cabfd4b7dfa872f",
+    "source_type": "sme_approved_answer",
+    "topic_ids": [
+      "encryption_at_rest",
+      "key_management"
+    ],
+    "approved_at": "2026-01-15",
+    "approved_by": "sarah.chen@example.com",
+    "expires_on": "2027-01-15",
+    "question_text": "How is customer data encrypted at rest?"
+  }
+}

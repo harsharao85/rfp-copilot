@@ -1,0 +1,14 @@
+{
+  "document_id": "lfb-243a27f5c621d62b",
+  "question_text": "Are you ISO 27001 certified? Provide certificate number and validity.",
+  "answer_text": "Yes. We hold ISO/IEC 27001:2022 certification under certificate number ISMS-2026-00142, issued by an accredited registrar and valid through 2029-01-14. The certified scope comprises the design, development, operation, and support of the SaaS platform and supporting cloud infrastructure. The Statement of Applicability is available under NDA. [iso27001_cert_2026]",
+  "topic_ids": [
+    "iso27001"
+  ],
+  "approved_by": "priya.sharma@example.com",
+  "approved_at": "2026-03-10",
+  "expires_on": "2027-03-10",
+  "corroborated_by": [
+    "iso27001_cert_2026"
+  ]
+}

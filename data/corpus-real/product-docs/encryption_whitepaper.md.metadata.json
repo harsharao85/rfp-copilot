@@ -1,0 +1,12 @@
+{
+  "metadataAttributes": {
+    "document_id": "encryption_whitepaper",
+    "source_type": "product_doc",
+    "topic_ids": [
+      "encryption_at_rest",
+      "encryption_in_transit",
+      "key_management"
+    ],
+    "updated_at": "2025-09-05"
+  }
+}

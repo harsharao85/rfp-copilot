@@ -1,0 +1,14 @@
+{
+  "metadataAttributes": {
+    "document_id": "lfb-fb7a2ac8e593014e",
+    "source_type": "sme_approved_answer",
+    "topic_ids": [
+      "data_residency",
+      "gdpr"
+    ],
+    "approved_at": "2026-02-20",
+    "approved_by": "sam.okafor@example.com",
+    "expires_on": "2027-02-20",
+    "question_text": "Where is customer data stored? Is data residency configurable?"
+  }
+}

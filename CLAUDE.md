@@ -75,6 +75,7 @@ The Karpathy guidelines govern *how*; the non-negotiable design decisions and ha
 2. **Generation:** Amazon Bedrock with **Claude Sonnet 4.6** for synthesis, **Claude Haiku 4.5** for classification. Prompt caching on the stable system prefix is mandatory. Bedrock Guardrails applied on every `InvokeModel`.
 3. **Orchestration:** Step Functions Standard (need `waitForTaskToken` for SME review + full audit trail). Plain `Map` state at demo scale; Distributed Map is deferred.
 4. **Source authority — the key differentiator.** Every topic maps to a dispatch plan declaring Primary (authoritative) + Secondary (phrasing) + Tertiary (context) sources. **Prior RFPs are NEVER treated as factual authority** — they are a phrasing reference only. Freshness suppression rule: if a Primary source's `updated_at` is more recent than a prior RFP's `approved_at`, the prior is suppressed from retrieval.
+4a. **Retrieval (single surface):** Bedrock Knowledge Base backed by **S3 Vectors** (1024-dim Titan Embed v2). One KB indexes all four S3-backed source prefixes (`compliance/`, `product-docs/`, `prior-rfps/`, `sme-approved/`); the retriever calls `bedrock-agent-runtime:Retrieve` with a `source_type` metadata filter to discriminate. Primary/secondary/tertiary passages come back as regular `RetrievedPassage` objects; the H signal is a separate KB query filtered to `sme_approved_answer` and mapped into `PriorAnswerMatch` objects with real cosine scores. **There is no DynamoDB LibraryFeedback** — approvals write directly to S3 + trigger a KB ingestion job. Index must declare `AMAZON_BEDROCK_TEXT` and `AMAZON_BEDROCK_METADATA` as `nonFilterableMetadataKeys`. OpenSearch Serverless is the documented scale-up trigger.
 5. **Confidence composite:** `0.45·H + 0.25·R + 0.15·C + 0.10·F + 0.05·G`. Never LLM self-reported. Thresholds ≥0.80 green, 0.55–0.80 amber, <0.55 red. H=0 caps at amber.
 6. **Hard rules (enterprise-legal, not AI-safety):**
    - Pricing / commercial → forced RED. Commercial desk owns.
@@ -83,13 +84,14 @@ The Karpathy guidelines govern *how*; the non-negotiable design decisions and ha
    - Forward-looking ("will deliver by Q3") → minimum AMBER.
    - Competitor disparagement → forced RED.
    Changes require General Counsel review. Tests in `lambdas/tests/test_hard_rules.py` lock behavior — **do not relax assertions to make tests pass**.
-7. **Flywheel with provenance.** Every SME-approved answer records the Primary sources that corroborated it at approval time. A staleness daemon (scheduled + on-demand) re-checks corroborating source `updated_at` and marks approved answers `corroboration_stale` when their Primary updates. Stale answers fall out of the H signal until re-approved.
+7. **Flywheel with provenance (Phase F: query-time staleness).** Every SME-approved answer records the Primary sources that corroborated it at approval time (`corroborated_by` sidecar field). Freshness suppression runs at *retrieval time* — the retriever's `_apply_freshness_suppression` compares each approved answer's `approved_at` against the freshest primary's `updated_at` in the same query. Stale approvals drop out of the H signal for that query without requiring a separate daemon. The staleness-daemon Lambda was removed in Phase F.
 8. **Data hygiene.** Synthetic data only — fully fictitious. No real customer names. Incoming RFPs are NDA-protected and never auto-ingest into the reference corpus.
 9. **IaC:** CDK v2 in TypeScript. Lambda source in Python 3.12 with `openpyxl`, `pydantic`, `boto3`, `structlog`.
 
 ## What's explicitly out of scope for the demo tier (do not add)
 
-- **Amazon Kendra.** Demo uses simple S3 + keyword search. Documented as scale-up when source count > 10.
+- **Amazon Kendra.** Kendra-class managed search is out — demo uses Bedrock KB + S3 Vectors (see §4a above). Kendra is the scale-up when source count > 10 and native connectors (Slack, Confluence, SharePoint) are needed.
+- **OpenSearch Serverless (AOSS).** Documented as the next-tier vector store above S3 Vectors; triggered by sustained QPS > ~5 or corpus > ~100k docs. Not for demo.
 - **Amazon Neptune.** Demo uses DynamoDB for Customer References and the Prior RFPs library metadata. Documented as scale-up when multi-hop queries emerge.
 - **VPC + PrivateLink.** Demo runs Lambdas outside VPC. Documented as production hardening.
 - **Distributed Map.** Plain `Map` at 10x concurrency handles 30-question demos. Distributed Map is documented as the 500-question scale-up.
@@ -97,63 +99,45 @@ The Karpathy guidelines govern *how*; the non-negotiable design decisions and ha
 - **Bedrock Agents / AgentCore.** Deliberate determinism — see `docs/architecture.md` §15 for the reasoning and when to add agents.
 - **React SME review UI polish.** A minimal working UI is in scope; heavy polish is deferred.
 
-## Current status (v0.5 target state)
+## Current status (v0.5 deployed, 2026-04-19 — post Phase F)
 
-The codebase currently reflects v0.4 scope (Kendra, Neptune, Distributed Map, VPC). The v0.5 architecture in `docs/architecture.md` is the target — Claude Code's first task is to **refactor the codebase toward the v0.5 demo-tier scope**, stack-stripping cleanly without touching the non-negotiable logic (confidence scorer, hard rules, Excel I/O, Guardrails).
+v0.5 is live in `us-east-1`. Two sequenced refactors landed today:
 
-| Component | v0.4 state (now) | v0.5 target | Action needed |
-|---|---|---|---|
-| `infra/lib/network-stack.ts` (VPC) | Exists | Remove | Delete stack; remove from `infra/bin/app.ts` |
-| `infra/lib/search-stack.ts` (Kendra) | Exists | Remove | Delete stack; remove from wiring |
-| `infra/lib/graph-stack.ts` (Neptune) | Exists | Remove | Delete stack; remove from wiring |
-| `infra/lib/storage-stack.ts` | Exists, VPC-tied | Keep, simplify | Remove KMS CMKs complexity if preferred; preserve buckets |
-| `infra/lib/data-stack.ts` (DynamoDB) | Exists | Keep + extend | Add `CustomerReferences` and `LibraryFeedback` tables |
-| `infra/lib/orchestration-stack.ts` | Uses VPC + Distributed Map + 10 Lambdas | Refactor | Remove VPC config; `Map` instead of `DistributedMap`; consolidate mock sources into one Lambda |
-| `infra/lib/observability-stack.ts` | Exists | Keep | Adjust metrics to match new state machine shape |
-| Mock Seismic + Gong | Not yet wired | Add | Single `mock_sources` Lambda behind API Gateway with path routing |
-| Source authority / dispatch | Not present | Add | `lambdas/classifier/dispatch.py` with hardcoded `DISPATCH_TABLE` |
-| Freshness suppression | Not present | Add | In `lambdas/retriever/handler.py` — compare Primary source `updated_at` vs. prior `approved_at` |
-| Staleness daemon | Not present | Add | `lambdas/staleness_daemon/handler.py` + EventBridge schedule + API Gateway on-demand trigger |
-| Composite confidence scorer | Done | Keep as-is | 18/18 tests passing — do not modify logic |
-| Hard rules engine | Done | Keep as-is | Tests lock enterprise-legal constraints |
-| Excel parser + writer | Done | Keep as-is | Smoke test produces colored output workbook |
-| Bedrock Guardrails | Done | Keep as-is | Attached to generator via env var |
-| SME review UI | Not started | Add minimal | React app + WebSocket API for amber/red approve/edit/reject |
-| Synthetic data | Done for v0.4 | Re-seed for v0.5 | Add realistic `updated_at` timestamps; include intentionally stale priors to demo suppression |
+- **Phase A-E (earlier session):** retrieval re-platformed from the placeholder S3-keyword scan to Bedrock KB + S3 Vectors. See `plans/image-7-still-no-snazzy-fairy.md`.
+- **Phase F (this session):** single retrieval surface. LibraryFeedback DynamoDB table deleted; SME-approved Q&A moved to the KB under `sme-approved/` prefix. Staleness daemon deleted. H signal is now real cosine similarity against the KB's `sme_approved_answer` slice, not a topic-tag overlap with fake 0.82.
 
-## What the user will likely ask you next (v0.5 build plan)
+The non-negotiable logic (confidence scorer formulas, hard rules, Excel I/O, Guardrails) was not touched in either refactor.
 
-**Phase A — Strip to demo-tier shape**
+| Component | State | Notes |
+|---|---|---|
+| `infra/lib/storage-stack.ts` | ✓ deployed | Four buckets + KMS CMKs; `referenceKey` now public-readonly so KB stack can grant decrypt |
+| `infra/lib/data-stack.ts` | ✓ deployed | Four DynamoDB tables: Jobs / Questions / Reviews / CustomerRefs. LibraryFeedback removed in Phase F. |
+| `infra/lib/knowledge-base-stack.ts` | ✓ deployed (2026-04-19) | S3 Vectors bucket + index (Titan v2, 1024d, cosine), Bedrock KB + DataSource, KB service role. `nonFilterableMetadataKeys` set on the index — do not remove |
+| `infra/lib/orchestration-stack.ts` | ✓ deployed | Plain `Map` (concurrency 10); retriever has `KNOWLEDGE_BASE_ID` env + `bedrock:Retrieve` grant; retriever timeout 90s |
+| `infra/lib/observability-stack.ts` | ✓ deployed | CloudWatch metrics + dashboard |
+| `infra/lib/static-site-stack.ts` | ✓ deployed | CloudFront + ACM on `rfp-copilot.meringue-app.com` |
+| `lambdas/retriever/handler.py` | ✓ refactored (Phases E+F) | `_knowledge_base_retrieve` replaces the old S3 keyword scan; `_kb_prior_matches` replaces the old DDB scan for the H signal; envelope preserved so freshness suppression still fires uniformly |
+| `lambdas/review_api/handler.py` | ✓ refactored (Phase F) | On approve, writes Q&A markdown + sidecar to `sme-approved/` in the reference corpus bucket and triggers `bedrock-agent:StartIngestionJob` (fire-and-forget). Old DDB PutItem path gone. |
+| `lambdas/mock_sources` (Seismic + Gong) | ✓ deployed | Single Lambda, 5% error rate + tail latency |
+| `lambdas/staleness_daemon` | **removed (Phase F)** | Query-time freshness suppression in the retriever covers what the daemon used to do asynchronously. |
+| `lambdas/classifier/dispatch.py` | ✓ deployed | `DISPATCH_TABLE` with `source_type`-aware routing |
+| Composite confidence scorer | ✓ 18/18 tests | Do not modify logic |
+| Hard rules engine | ✓ tests lock behavior | Changes require General Counsel |
+| Excel parser + writer | ✓ done | Smoke test produces colored workbook |
+| Bedrock Guardrails | ✓ attached | Output-only apply_guardrail in the generator |
+| SME review UI | Minimal | React UI exists for approve/reject; polish deferred |
+| Synthetic data | ✓ regenerated | Real multi-page PDFs (compliance) + long-form markdown (product-docs, prior-rfps) under `data/corpus-real/`. Three priors intentionally stale vs. their primaries |
 
-1. Read `docs/architecture.md` end-to-end to orient.
-2. Remove VPC / Kendra / Neptune stacks and all references.
-3. Refactor `orchestration-stack.ts` to plain `Map` state; consolidate Lambdas where §6 of the architecture doc suggests.
-4. Verify `npx cdk synth` runs clean.
+## What the user will likely ask you next
 
-**Phase B — Add source authority**
+v0.5 is deployed and the retrieval path is real (Bedrock KB + S3 Vectors). Plausible next directions:
 
-5. Create `lambdas/classifier/dispatch.py` with the `DISPATCH_TABLE` from `docs/architecture.md` §5.3.
-6. Modify `lambdas/classifier/handler.py` to return `topics + dispatch_plan`.
-7. Modify `lambdas/retriever/handler.py` to consume `dispatch_plan` and apply the four corroboration rules.
-8. Add tests for freshness suppression (prior with older `approved_at` than Primary's `updated_at` → suppressed).
-
-**Phase C — Mock sources + staleness daemon**
-
-9. Build the single `mock_sources` Lambda with `/seismic/content` + `/gong/calls` paths, simulated latencies and 5% error rate.
-10. Build `staleness_daemon` Lambda with EventBridge daily schedule + API Gateway on-demand trigger.
-11. Seed synthetic data with realistic timestamps — include at least two prior RFPs that are intentionally stale vs. their corroborating Primary source.
-
-**Phase D — SME review UI**
-
-12. Minimal React app — list of amber/red questions, approve/edit/reject buttons.
-13. WebSocket API Gateway + Lambda that calls `SendTaskSuccess` with reviewer input.
-14. On approval, write to `LibraryFeedback` table with `corroborated_by` + `corroborated_at`.
-
-**Phase E — Deploy + demo polish**
-
-15. `scripts/deploy-for-demo.sh` + `scripts/teardown.sh` for fast cycle.
-16. Reset-demo script that restores synthetic data to known state in under 2 minutes.
-17. Dry-run the full demo flow end-to-end. Verify: upload → parse → process → download → stale-prior suppression visible in audit log → circuit breaker fires when mock source is disabled.
+- **Full-pipeline tier-distribution regression check.** Upload `data/incoming/demo_rfp_techops.xlsx`, run end-to-end via the UI, confirm tier counts are within ±1 of the pre-KB-swap baseline. This is the last uncovered verify step from the 2026-04-19 refactor plan.
+- **Add more source coverage.** Expand corpus docs (more compliance PDFs, deeper product-docs), expand `DISPATCH_TABLE` coverage for niche topics, expand LibraryFeedback seed beyond the current 8 Q&A.
+- **SME review UI polish.** The minimal React UI works for approve/edit/reject but is cosmetically rough.
+- **Observability tightening.** Add CloudWatch dashboard tile for KB retrieval latency; add a metric for `suppressed_prior_count` rate over time.
+- **Demo scripts.** `scripts/reset-demo.sh` to restore synthetic data to known state in <2 min between demo runs.
+- **Scale-up exploration** (document-only, don't implement): OpenSearch Serverless, Distributed Map, Kendra swap for the mock sources.
 
 ## First-time deployment checklist
 
@@ -171,22 +155,32 @@ cd ../lambdas && pip install -e ".[dev]" --break-system-packages
 
 # Validate locally
 cd ../lambdas && PYTHONPATH=. python -m pytest tests/ -v
-cd .. && python scripts/generate_synthetic_data.py && python scripts/smoke_test.py
+cd .. && python scripts/generate_synthetic_data.py \
+      && python scripts/generate_corpus_documents.py \
+      && python scripts/smoke_test.py
 
 # Bootstrap + deploy
 cd infra && npx cdk bootstrap
 npx cdk synth
 npx cdk deploy --all
+
+# Seed reference data + trigger KB ingestion
+cd .. && python scripts/seed_reference_data.py
+python scripts/seed_s3_corpus.py   # uploads data/corpus-real/ + polls KB ingestion to COMPLETE
 ```
 
 ## Known issues and deferred TODOs (v0.5)
 
-- **Bedrock model IDs** — `anthropic.claude-sonnet-4-6-v1:0` and `anthropic.claude-haiku-4-5-v1:0` in `lambdas/shared/bedrock_client.py`. Confirm these match the target AWS region's Bedrock catalog via `aws bedrock list-foundation-models`. Also confirm model access is granted in the Bedrock console.
-- **DynamoDB-backed Customer References** — v0.4 had this in Neptune; v0.5 moves it to DynamoDB. Seed from `data/graph/customers.json` with a one-off loader script `scripts/seed_customer_refs.py`.
-- **Prior RFPs corpus format** — should land in S3 as JSON-per-answer with `topic_ids`, `approved_at`, `expires_on`, `corroborated_by` fields for the freshness-suppression rule to work.
-- **Staleness daemon on-demand endpoint** — API Gateway trigger lets the demo manually fire the staleness check mid-session to visibly demonstrate the mechanism.
+- **Bedrock model IDs** — `anthropic.claude-sonnet-4-6-v1:0` and `anthropic.claude-haiku-4-5-v1:0` in `lambdas/shared/bedrock_client.py`, plus `amazon.titan-embed-text-v2:0` referenced by the KB stack. Confirm access is granted in the Bedrock console for the target region.
+- **DynamoDB RemovalPolicy is RETAIN by default** — when the LibraryFeedback table was dropped from the data stack in Phase F, CloudFormation left the table orphaned in AWS. Clean up with `aws dynamodb delete-table`. Same pattern applies to any other DDB table removal.
+- **Phase F multi-stack deploy sequence** — dropping a cross-stack export requires `--exclusively` so CDK doesn't try to deploy all dependencies. Order: KB (to add new export) → orchestration (with `--exclusively`, drops stale import) → data (with `--exclusively`, drops the export).
+- **SME-approval-to-searchable latency** — when an SME approves an answer in the review UI, the approval writes to S3 immediately but the KB takes ~1–3 min to ingest before it's retrievable. This is acceptable because approvals benefit future RFPs, not the current one.
+- **KB index name & KB name in CDK** — `indexName` is omitted so CFN auto-generates (allows replacement). `name` on the `CfnKnowledgeBase` carries a manual version suffix (`-v2`); bump when an immutable property forces replacement.
+- **Replace-the-KB dance** — if an immutable KB property changes (storage config, embedding model, chunking), CFN's export-in-use check blocks in-place replacement. The 3-deploy dance is documented in `docs/architecture.md` §17. Plan accordingly before making such changes.
+- **Orphaned KB cleanup** — KB replacements can leave the old KB + DataSource behind in `DELETE_UNSUCCESSFUL` state (old DS can't delete its vector-store data after old index is gone). Fix: `aws bedrock-agent update-data-source --data-deletion-policy RETAIN`, then delete DS, then delete KB. Cheap but console-noisy.
 - **Circuit-breaker visibility** — CloudWatch metric + dashboard so the demo can show the breaker firing live when a mock source is deliberately disabled.
 - **Bedrock Provisioned Throughput** — not configured. On-demand is fine for demo volumes; documented as a scale-up lever.
+- **Tier-shape regression check** — full Step Functions pipeline run against `demo_rfp_techops.xlsx` to confirm tier distribution ±1 of pre-KB-swap baseline. Not yet done.
 
 ## How the user likes to work
 
@@ -208,21 +202,33 @@ rfp-copilot/
 │   ├── architecture.md           v0.5 architecture, diagrams, trade-offs — the design contract
 │   ├── technical-faqs.md         47 Q&A for demo defense
 │   └── archive/                  v0.4 and earlier
-├── infra/                        CDK-TS IaC (refactor per Phase A above)
+├── infra/                        CDK-TS IaC (six stacks: storage, data, knowledge-base, orchestration, observability, static-site)
+│   └── lib/knowledge-base-stack.ts  S3 Vectors + Bedrock KB + DataSource + KB service role
 ├── lambdas/                      Python 3.12 Lambda sources
 │   ├── shared/                   models, bedrock_client, logging
-│   ├── excel_parser/             (done — do not modify logic)
-│   ├── classifier/               add dispatch.py + modify handler.py
-│   ├── retriever/                refactor: replace Kendra+Neptune calls with direct source calls + corroboration rules
-│   ├── generator/                (done — keep as-is)
-│   ├── confidence_scorer/        (done — do not modify logic)
-│   ├── hard_rules/               (done — do not modify logic)
-│   ├── excel_writer/             (done — do not modify logic)
-│   ├── mock_sources/             NEW — single Lambda for Seismic + Gong mocks
-│   ├── staleness_daemon/         NEW
-│   └── tests/                    18 tests passing, extend for source-authority
-├── data/                         Synthetic fixtures (re-seed per Phase C)
-├── scripts/                      generate_synthetic_data.py, smoke_test.py, + new deploy/teardown/reset
+│   ├── excel_parser/             (do not modify logic)
+│   ├── question_classifier/      handler.py + dispatch.py (DISPATCH_TABLE)
+│   ├── retriever/                _knowledge_base_retrieve + freshness suppression (do not modify envelope)
+│   ├── generator/                (do not modify logic)
+│   ├── confidence_scorer/        (do not modify logic)
+│   ├── hard_rules/               (do not modify logic — policy-locked)
+│   ├── excel_writer/             (do not modify logic)
+│   ├── mock_sources/             Single Lambda for Seismic + Gong mocks
+│   └── tests/                    40 tests passing (4 suites + KB-adapter suite)
+├── data/
+│   ├── corpus/                   Compact JSON sidecars (source of truth for all 4 prefixes)
+│   │   ├── compliance/           SOC 2 / ISO 27001 / FedRAMP primary source metadata
+│   │   ├── product-docs/         Encryption / SSO-MFA / DR product-doc metadata
+│   │   ├── prior-rfps/           Prior RFPs (phrasing reference, freshness-suppressed)
+│   │   └── sme-approved/         SME-approved Q&A (H-signal source)
+│   └── corpus-real/              Generated PDFs + markdown + Bedrock sidecar metadata (fed to KB)
+├── scripts/
+│   ├── generate_synthetic_data.py
+│   ├── generate_corpus_documents.py   → data/corpus-real/
+│   ├── seed_s3_corpus.py              uploads + triggers KB ingestion
+│   ├── seed_reference_data.py         DynamoDB seeds
+│   ├── smoke_test.py / reset-demo.sh / teardown.sh / deploy-for-demo.sh
+├── plans/                        Session plan files (project-scoped, referenceable by path)
 └── .github/workflows/ci.yml      Lint + typecheck + pytest
 ```
 
