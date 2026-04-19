@@ -1,0 +1,66 @@
+[
+  {
+    "customer_id": "cust-001",
+    "name": "Northwind Capital",
+    "industry": "financial_services",
+    "employees": 8500,
+    "contract_size_usd": 450000,
+    "public_reference": true,
+    "approval_expires": "2026-10-13",
+    "deployed_products": [
+      "platform",
+      "enterprise_tier"
+    ]
+  },
+  {
+    "customer_id": "cust-002",
+    "name": "Helix Biomedical",
+    "industry": "healthcare",
+    "employees": 3200,
+    "contract_size_usd": 180000,
+    "public_reference": true,
+    "approval_expires": "2026-05-31",
+    "deployed_products": [
+      "platform"
+    ]
+  },
+  {
+    "customer_id": "cust-003",
+    "name": "Aurora Federal Credit Union",
+    "industry": "financial_services",
+    "employees": 5400,
+    "contract_size_usd": 320000,
+    "public_reference": false,
+    "approval_expires": null,
+    "deployed_products": [
+      "platform",
+      "enterprise_tier"
+    ]
+  },
+  {
+    "customer_id": "cust-004",
+    "name": "Kestrel Logistics",
+    "industry": "logistics",
+    "employees": 12500,
+    "contract_size_usd": 720000,
+    "public_reference": true,
+    "approval_expires": "2026-03-17",
+    "deployed_products": [
+      "platform",
+      "enterprise_tier"
+    ]
+  },
+  {
+    "customer_id": "cust-005",
+    "name": "Meridian Energy",
+    "industry": "energy",
+    "employees": 22000,
+    "contract_size_usd": 1200000,
+    "public_reference": true,
+    "approval_expires": "2027-03-02",
+    "deployed_products": [
+      "platform",
+      "enterprise_tier"
+    ]
+  }
+]

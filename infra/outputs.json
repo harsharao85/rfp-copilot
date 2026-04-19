@@ -1,0 +1,38 @@
+{
+  "rfp-copilot-dev-data": {
+    "LibraryFeedbackTableName": "rfp-copilot-dev-data-LibraryFeedbackTableB9B77862-1S857GFB1RZVB",
+    "ExportsOutputFnGetAttQuestionsTable14A8B4ADArnBEACCB7D": "arn:aws:dynamodb:us-east-1:658203403363:table/rfp-copilot-dev-data-QuestionsTable14A8B4AD-1J9FDII31RST",
+    "ExportsOutputFnGetAttCustomerRefsTableF30403ACArnBB91ADD8": "arn:aws:dynamodb:us-east-1:658203403363:table/rfp-copilot-dev-data-CustomerRefsTableF30403AC-1JOGTWZ3EO3W1",
+    "ExportsOutputRefQuestionsTable14A8B4AD86006DFE": "rfp-copilot-dev-data-QuestionsTable14A8B4AD-1J9FDII31RST",
+    "ExportsOutputFnGetAttJobsTable1970BC16ArnC40C1624": "arn:aws:dynamodb:us-east-1:658203403363:table/rfp-copilot-dev-data-JobsTable1970BC16-1L4P0NBO32YQ3",
+    "ReviewsTableName": "rfp-copilot-dev-data-ReviewsTable1E51AE49-8JZQ3YJL75SX",
+    "CustomerRefsTableName": "rfp-copilot-dev-data-CustomerRefsTableF30403AC-1JOGTWZ3EO3W1",
+    "ExportsOutputRefLibraryFeedbackTableB9B77862B21FE9AD": "rfp-copilot-dev-data-LibraryFeedbackTableB9B77862-1S857GFB1RZVB",
+    "ExportsOutputFnGetAttLibraryFeedbackTableB9B77862Arn16A4A421": "arn:aws:dynamodb:us-east-1:658203403363:table/rfp-copilot-dev-data-LibraryFeedbackTableB9B77862-1S857GFB1RZVB",
+    "JobsTableName": "rfp-copilot-dev-data-JobsTable1970BC16-1L4P0NBO32YQ3",
+    "QuestionsTableName": "rfp-copilot-dev-data-QuestionsTable14A8B4AD-1J9FDII31RST",
+    "ExportsOutputRefJobsTable1970BC16EDB4A824": "rfp-copilot-dev-data-JobsTable1970BC16-1L4P0NBO32YQ3",
+    "ExportsOutputRefCustomerRefsTableF30403ACDE83BBB1": "rfp-copilot-dev-data-CustomerRefsTableF30403AC-1JOGTWZ3EO3W1"
+  },
+  "rfp-copilot-dev-storage": {
+    "ExportsOutputRefOutputBucket7114EB279FD7F7F1": "rfp-copilot-dev-storage-outputbucket7114eb27-28f8zfqd3fvg",
+    "OutputBucketName": "rfp-copilot-dev-storage-outputbucket7114eb27-28f8zfqd3fvg",
+    "ExportsOutputFnGetAttReferenceKeyFC159260Arn5143A054": "arn:aws:kms:us-east-1:658203403363:key/2c521dd7-e64e-4cd9-9b90-0c1b4dfc7772",
+    "ExportsOutputFnGetAttIncomingKeyAC2FD89EArnF2E5B023": "arn:aws:kms:us-east-1:658203403363:key/09ecc7b3-ced6-4970-a5c3-565e0def1bc8",
+    "IncomingBucketName": "rfp-copilot-dev-storage-incomingbucket8258de13-7ooyiodjngme",
+    "AuditBucketName": "rfp-copilot-dev-storage-auditbucketb01e0ae8-mkfy5ewonms1",
+    "ExportsOutputFnGetAttOutputBucket7114EB27Arn67D5716D": "arn:aws:s3:::rfp-copilot-dev-storage-outputbucket7114eb27-28f8zfqd3fvg",
+    "ReferenceCorpusBucketName": "rfp-copilot-dev-storage-referencecorpusbucketeced4-rytq0al3phra",
+    "ExportsOutputFnGetAttOutputKeyFDFE7A84Arn3EA85C8B": "arn:aws:kms:us-east-1:658203403363:key/5d9841d7-b267-422f-bbf7-d25941924a5a",
+    "ExportsOutputFnGetAttReferenceCorpusBucketECED4EAAArn235D328F": "arn:aws:s3:::rfp-copilot-dev-storage-referencecorpusbucketeced4-rytq0al3phra",
+    "ExportsOutputFnGetAttIncomingBucket8258DE13Arn0D77B9B1": "arn:aws:s3:::rfp-copilot-dev-storage-incomingbucket8258de13-7ooyiodjngme",
+    "ExportsOutputRefReferenceCorpusBucketECED4EAA71F7A1ED": "rfp-copilot-dev-storage-referencecorpusbucketeced4-rytq0al3phra"
+  },
+  "rfp-copilot-dev-orchestration": {
+    "GuardrailId": "26fktvsugihf",
+    "ReviewApiUrl": "https://rusa84gwa4.execute-api.us-east-1.amazonaws.com",
+    "MockSourcesApiUrl": "https://xt2cs4vj4c.execute-api.us-east-1.amazonaws.com",
+    "ExportsOutputRefRfpStateMachine46EAF9AE231351B7": "arn:aws:states:us-east-1:658203403363:stateMachine:RfpStateMachine46EAF9AE-S8D2Gt7befCZ",
+    "StateMachineArn": "arn:aws:states:us-east-1:658203403363:stateMachine:RfpStateMachine46EAF9AE-S8D2Gt7befCZ"
+  }
+}

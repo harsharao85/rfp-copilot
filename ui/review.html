@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RFP Copilot — SME Review</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #f5f5f5; color: #1a1a1a; }
+  header { background: #1a2332; color: white; padding: 16px 24px;
+           display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .badge { background: #2d9cdb; border-radius: 4px; padding: 2px 8px;
+                  font-size: 12px; }
+  .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+  .config-bar { background: white; border-radius: 8px; padding: 16px;
+                margin-bottom: 20px; display: flex; gap: 8px; align-items: center; }
+  .config-bar label { font-size: 13px; color: #666; white-space: nowrap; }
+  .config-bar input { flex: 1; padding: 8px; border: 1px solid #ddd;
+                      border-radius: 4px; font-size: 13px; font-family: monospace; }
+  .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;
+         font-size: 13px; font-weight: 500; transition: opacity .15s; }
+  .btn:hover { opacity: .85; }
+  .btn-primary { background: #2d9cdb; color: white; }
+  .btn-success { background: #27ae60; color: white; }
+  .btn-danger  { background: #e74c3c; color: white; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+  .card { background: white; border-radius: 8px; padding: 20px;
+          margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .card h2 { font-size: 15px; margin-bottom: 8px; }
+  .job-list { list-style: none; }
+  .job-item { display: flex; align-items: center; justify-content: space-between;
+              padding: 12px 0; border-bottom: 1px solid #f0f0f0; }
+  .job-item:last-child { border-bottom: none; }
+  .job-meta { font-size: 12px; color: #888; margin-top: 2px; }
+  .tier-pill { display: inline-block; padding: 2px 8px; border-radius: 10px;
+               font-size: 11px; font-weight: 600; }
+  .tier-red    { background: #ffc7ce; color: #c0392b; }
+  .tier-amber  { background: #ffeb9c; color: #b7770d; }
+  .tier-green  { background: #c6efce; color: #1e7e34; }
+  .question-card { margin-bottom: 12px; border: 1px solid #e8e8e8;
+                   border-radius: 6px; padding: 16px; }
+  .question-card.red   { border-left: 4px solid #e74c3c; }
+  .question-card.amber { border-left: 4px solid #f39c12; }
+  .q-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .q-text { font-size: 14px; font-weight: 500; flex: 1; }
+  .q-meta { font-size: 12px; color: #888; margin-bottom: 8px; }
+  .q-answer { width: 100%; min-height: 80px; padding: 10px; border: 1px solid #ddd;
+              border-radius: 4px; font-size: 13px; line-height: 1.5; resize: vertical; }
+  .triggers { margin-top: 8px; }
+  .trigger-tag { display: inline-block; background: #fff3cd; border: 1px solid #ffc107;
+                 border-radius: 3px; padding: 1px 6px; font-size: 11px;
+                 margin: 2px; color: #856404; }
+  .action-bar { display: flex; gap: 8px; align-items: center; margin-top: 20px; }
+  .action-bar .spacer { flex: 1; }
+  .status-msg { padding: 12px 16px; border-radius: 6px; font-size: 14px;
+                margin-top: 16px; }
+  .status-ok  { background: #d4edda; color: #155724; }
+  .status-err { background: #f8d7da; color: #721c24; }
+  .empty-state { text-align: center; padding: 48px; color: #888; font-size: 14px; }
+  .confidence { font-size: 12px; color: #666; }
+  #back-btn { display: none; }
+  .loading { text-align: center; padding: 32px; color: #888; }
+  /* Citations */
+  .citations-toggle { font-size: 12px; color: #2d9cdb; cursor: pointer;
+                      margin-top: 8px; display: inline-block; user-select: none; }
+  .citations-list { display: none; margin-top: 8px; border: 1px solid #eee;
+                    border-radius: 4px; overflow: hidden; }
+  .citations-list.open { display: block; }
+  .citation-row { display: flex; gap: 8px; align-items: flex-start;
+                  padding: 8px 10px; border-bottom: 1px solid #f5f5f5; font-size: 12px; }
+  .citation-row:last-child { border-bottom: none; }
+  .src-badge { display: inline-block; padding: 1px 6px; border-radius: 3px;
+               font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .src-primary   { background: #cce5ff; color: #004085; }
+  .src-secondary { background: #fff3cd; color: #856404; }
+  .src-tertiary  { background: #e2e3e5; color: #383d41; }
+  .citation-text { color: #555; line-height: 1.4; }
+  .citation-uri  { color: #888; font-size: 11px; font-family: monospace;
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                   max-width: 300px; }
+  /* Confidence breakdown */
+  .conf-breakdown { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .conf-item { background: #f0f0f0; border-radius: 4px; padding: 3px 8px;
+               font-size: 11px; color: #555; }
+  .conf-item span { font-weight: 600; color: #222; }
+  /* Suppressed priors */
+  .suppressed-badge { display: inline-block; background: #fff3cd; color: #856404;
+                      border: 1px solid #ffc107; border-radius: 4px; padding: 2px 8px;
+                      font-size: 11px; margin-top: 6px; cursor: help; }
+  /* Corroboration */
+  .corroboration { margin-top: 6px; font-size: 12px; }
+  .corroboration.ok   { color: #155724; }
+  .corroboration.warn { color: #c0392b; font-weight: 500; }
+</style>
+</head>
+<body>
+<header>
+  <h1>RFP Copilot</h1>
+  <span class="badge">SME Review</span>
+  <a href="upload.html" style="color:#aaa;font-size:13px;text-decoration:none;margin-left:auto">← Upload</a>
+</header>
+
+<div class="container">
+  <!-- Nav bar -->
+  <div class="config-bar">
+    <button class="btn" id="back-btn" onclick="showList()">← Back</button>
+    <button class="btn" id="staleness-btn" onclick="triggerStaleness()" title="Trigger staleness sweep (demo)">⟳ Staleness</button>
+  </div>
+  <div id="staleness-result"></div>
+
+  <div id="main"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const apiUrl = 'https://u6i419jl59.execute-api.us-east-1.amazonaws.com';
+const uploadApiUrl = 'https://9fdxjyjafl.execute-api.us-east-1.amazonaws.com';
+
+function init() {
+  const params = new URLSearchParams(location.search);
+  const jobParam = params.get('job');
+  if (jobParam) { showReview(jobParam); } else { showList(); }
+}
+
+async function api(path, method='GET', body=null) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(apiUrl + path, opts);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+function tierPill(tier) {
+  return `<span class="tier-pill tier-${tier}">${tier.toUpperCase()}</span>`;
+}
+
+// ---- List view ----
+async function showList() {
+  $('back-btn').style.display = 'none';
+  $('main').innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const { reviews } = await api('/reviews');
+    if (!reviews.length) {
+      $('main').innerHTML = '<div class="card"><div class="empty-state">No pending reviews.<br>Run a pipeline job to get started.</div></div>';
+      return;
+    }
+    const rows = reviews.map(r => `
+      <li class="job-item">
+        <div>
+          <strong>${r.jobId}</strong>
+          <div class="job-meta">${r.reviewRequestedAt ? new Date(r.reviewRequestedAt).toLocaleString() : ''} · ${r.answerCount} answers</div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="showReview('${r.jobId}')">Review →</button>
+      </li>`).join('');
+    $('main').innerHTML = `
+      <div class="card">
+        <h2>Pending Reviews (${reviews.length})</h2>
+        <ul class="job-list">${rows}</ul>
+      </div>`;
+  } catch(e) {
+    $('main').innerHTML = `<div class="status-msg status-err">Error: ${e.message}</div>`;
+  }
+}
+
+// ---- Detail view ----
+async function showReview(jobId) {
+  $('back-btn').style.display = 'inline-block';
+  $('main').innerHTML = '<div class="loading">Loading questions…</div>';
+  try {
+    const data = await api(`/reviews/${jobId}`);
+    const qs = data.questions || [];
+    const redCount = qs.filter(q=>q.tier==='red').length;
+    const amberCount = qs.filter(q=>q.tier==='amber').length;
+
+    const qCards = qs.map(q => `
+      <div class="question-card ${q.tier}" id="qc-${q.questionId}">
+        <div class="q-header">
+          ${tierPill(q.tier)}
+          ${confBreakdown(q)}
+          <span class="q-text">${escHtml(q.text || q.questionId)}</span>
+        </div>
+        ${q.section ? `<div class="q-meta">Section: ${escHtml(q.section)}</div>` : ''}
+        <textarea class="q-answer" data-qid="${q.questionId}" id="ans-${q.questionId}">${escHtml(q.answer_text || '')}</textarea>
+        ${q.hard_rule_triggers && q.hard_rule_triggers.length ? `
+          <div class="triggers">
+            ${q.hard_rule_triggers.map(t=>`<span class="trigger-tag">${t}</span>`).join('')}
+          </div>` : ''}
+        ${suppressedBadge(q)}
+        ${corroborationStatus(q)}
+        ${citationsSection(q)}
+      </div>`).join('');
+
+    $('main').innerHTML = `
+      <div class="card">
+        <h2>${jobId}</h2>
+        <div class="q-meta" style="margin-bottom:12px">
+          ${tierPill('red')} ${redCount} &nbsp; ${tierPill('amber')} ${amberCount} questions require review
+        </div>
+        ${qCards}
+        <div class="action-bar">
+          <button class="btn btn-danger" onclick="doReject('${jobId}')">Reject All</button>
+          <div class="spacer"></div>
+          <button class="btn btn-success" onclick="doApprove('${jobId}')">Approve &amp; Resume →</button>
+        </div>
+        <div id="status-${jobId}"></div>
+      </div>`;
+  } catch(e) {
+    $('main').innerHTML = `<div class="status-msg status-err">Error: ${e.message}</div>`;
+  }
+}
+
+async function doApprove(jobId) {
+  const edits = [];
+  document.querySelectorAll('.q-answer').forEach(ta => {
+    edits.push({ questionId: ta.dataset.qid, answer_text: ta.value });
+  });
+  try {
+    await api(`/reviews/${jobId}/approve`, 'POST', { answers: edits });
+    document.querySelectorAll('.btn-success,.btn-danger').forEach(b=>b.disabled=true);
+    $(`status-${jobId}`).innerHTML = '<div class="status-msg status-info">✓ Approved — generating output file…</div>';
+    pollForDownload(jobId);
+  } catch(e) {
+    $(`status-${jobId}`).innerHTML = `<div class="status-msg status-err">Error: ${e.message}</div>`;
+  }
+}
+
+function pollForDownload(jobId) {
+  let attempts = 0;
+  const timer = setInterval(async () => {
+    attempts++;
+    try {
+      const r = await fetch(`${uploadApiUrl}/upload/${jobId}/status`);
+      const data = await r.json();
+      if (data.status === 'SUCCEEDED') {
+        clearInterval(timer);
+        const dl = await fetch(`${uploadApiUrl}/upload/${jobId}/download`);
+        const dlData = await dl.json();
+        $(`status-${jobId}`).innerHTML = `
+          <div class="status-msg status-ok">
+            ✓ Done — output file ready.
+            <a href="${dlData.downloadUrl}" target="_blank" style="margin-left:12px;font-weight:600;color:#155724">
+              Download answered RFP ↓
+            </a>
+          </div>`;
+      } else if (data.status === 'FAILED' || attempts > 24) {
+        clearInterval(timer);
+        const msg = data.status === 'FAILED'
+          ? 'Pipeline failed after approval. Check CloudWatch logs.'
+          : 'Timed out waiting for output. Check the Upload page for status.';
+        $(`status-${jobId}`).innerHTML = `<div class="status-msg status-err">${msg}</div>`;
+      }
+    } catch(_) { /* transient — keep polling */ }
+  }, 5000);
+}
+
+async function doReject(jobId) {
+  const reason = prompt('Reason for rejection (optional):') || 'Rejected by SME';
+  try {
+    await api(`/reviews/${jobId}/reject`, 'POST', { reason });
+    $(`status-${jobId}`).innerHTML = '<div class="status-msg status-info">Rejected. This RFP has been sent back — no output file will be generated.</div>';
+    document.querySelectorAll('.btn-success,.btn-danger').forEach(b=>b.disabled=true);
+  } catch(e) {
+    $(`status-${jobId}`).innerHTML = `<div class="status-msg status-err">Error: ${e.message}</div>`;
+  }
+}
+
+async function triggerStaleness() {
+  const btn = $('staleness-btn');
+  const out = $('staleness-result');
+  btn.disabled = true;
+  out.innerHTML = '';
+  try {
+    const data = await api('/admin/staleness/trigger', 'POST');
+    out.innerHTML = `<div class="status-msg status-ok" style="margin-top:8px">
+      Staleness sweep: checked ${data.checked}, flagged ${data.stale_flagged}, cleared ${data.stale_cleared}
+    </div>`;
+  } catch(e) {
+    out.innerHTML = `<div class="status-msg status-err" style="margin-top:8px">Staleness error: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ----- 3b: Confidence breakdown -----
+function confBreakdown(q) {
+  const b = q.confidence_breakdown || {};
+  if (!Object.keys(b).length) return `<span class="confidence">${(+(q.raw_confidence||0)*100).toFixed(0)}%</span>`;
+  const items = [
+    ['H', b.hallucination_score, '45%'],
+    ['R', b.retrieval_relevance, '25%'],
+    ['C', b.citation_coverage, '15%'],
+    ['F', b.format_compliance, '10%'],
+    ['G', b.guardrail_pass, '5%'],
+  ].filter(([,v]) => v != null);
+  const summary = (+(q.raw_confidence||0)*100).toFixed(0);
+  const breakdown = items.map(([k,v,w]) =>
+    `<span class="conf-item">${k}<sub>${w}</sub> <span>${(+v*100).toFixed(0)}%</span></span>`
+  ).join('');
+  return `<span class="confidence">${summary}%</span>
+    <div class="conf-breakdown">${breakdown}</div>`;
+}
+
+// ----- 3c: Suppressed priors badge -----
+function suppressedBadge(q) {
+  const n = +(q.suppressed_prior_count || 0);
+  if (!n) return '';
+  return `<div><span class="suppressed-badge"
+    title="Prior RFP answers were suppressed because the authoritative source was updated after they were approved.">
+    🕐 ${n} stale prior${n > 1 ? 's' : ''} suppressed
+  </span></div>`;
+}
+
+// ----- 3d: Corroboration status -----
+function corroborationStatus(q) {
+  if (q.tier === 'green') return '';
+  const uris = q.primary_passage_uris || [];
+  if (!uris.length) {
+    return `<div class="corroboration warn">⚠ No primary source corroboration</div>`;
+  }
+  const list = uris.map(u => `<span style="font-family:monospace;font-size:11px">${escHtml(u)}</span>`).join(', ');
+  return `<div class="corroboration ok">✓ Corroborated by: ${list}</div>`;
+}
+
+// ----- 3a: Citations section -----
+const PRIMARY_SYSTEMS = new Set(['compliance', 'whitepaper', 'security-docs']);
+const SECONDARY_SYSTEMS = new Set(['prior-rfp', 'library']);
+
+function srcBadgeClass(sourceSystem) {
+  if (PRIMARY_SYSTEMS.has(sourceSystem)) return 'src-primary';
+  if (SECONDARY_SYSTEMS.has(sourceSystem)) return 'src-secondary';
+  return 'src-tertiary';
+}
+
+function citationsSection(q) {
+  const citations = q.citations || [];
+  if (!citations.length) return '';
+  const qid = q.questionId;
+  const rows = citations.map(c => {
+    const sys = c.source_system || 'unknown';
+    const cls = srcBadgeClass(sys);
+    const text = (c.text || c.passage_text || '').slice(0, 150);
+    const uri = c.uri || c.source_uri || '';
+    return `<div class="citation-row">
+      <div style="min-width:80px"><span class="src-badge ${cls}">${escHtml(sys)}</span></div>
+      <div>
+        ${uri ? `<div class="citation-uri" title="${escHtml(uri)}">${escHtml(uri)}</div>` : ''}
+        <div class="citation-text">${escHtml(text)}${text.length >= 150 ? '…' : ''}</div>
+      </div>
+    </div>`;
+  }).join('');
+  return `
+    <span class="citations-toggle" onclick="toggleCitations('${qid}')">▶ Sources (${citations.length})</span>
+    <div class="citations-list" id="cit-${qid}">${rows}</div>`;
+}
+
+function toggleCitations(qid) {
+  const el = document.getElementById('cit-' + qid);
+  const toggle = el.previousElementSibling;
+  const open = el.classList.toggle('open');
+  toggle.textContent = (open ? '▼' : '▶') + toggle.textContent.slice(1);
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+init();
+</script>
+</body>
+</html>

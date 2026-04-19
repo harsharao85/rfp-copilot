@@ -1,0 +1,130 @@
+{
+  "products": [
+    {
+      "id": "platform",
+      "name": "Core Platform",
+      "tiers": [
+        "team",
+        "business",
+        "enterprise"
+      ]
+    },
+    {
+      "id": "enterprise_tier",
+      "name": "Enterprise Tier",
+      "features": [
+        "BYOK",
+        "audit_export",
+        "priority_sla"
+      ]
+    }
+  ],
+  "topics": [
+    {
+      "id": "encryption_at_rest",
+      "label": "Encryption at rest"
+    },
+    {
+      "id": "encryption_in_transit",
+      "label": "Encryption in transit"
+    },
+    {
+      "id": "key_management",
+      "label": "Key management / BYOK"
+    },
+    {
+      "id": "sso",
+      "label": "Single sign-on"
+    },
+    {
+      "id": "mfa",
+      "label": "Multi-factor authentication"
+    },
+    {
+      "id": "scim",
+      "label": "SCIM provisioning"
+    },
+    {
+      "id": "dr_bcp",
+      "label": "Disaster recovery / BCP"
+    },
+    {
+      "id": "incident_response",
+      "label": "Incident response"
+    },
+    {
+      "id": "ssdlc",
+      "label": "Secure SDLC"
+    },
+    {
+      "id": "pentest",
+      "label": "Penetration testing"
+    },
+    {
+      "id": "sbom",
+      "label": "Software bill of materials"
+    },
+    {
+      "id": "dpa",
+      "label": "Data processing agreement"
+    },
+    {
+      "id": "data_residency",
+      "label": "Data residency"
+    },
+    {
+      "id": "soc2",
+      "label": "SOC 2"
+    },
+    {
+      "id": "iso27001",
+      "label": "ISO 27001"
+    },
+    {
+      "id": "fedramp",
+      "label": "FedRAMP"
+    },
+    {
+      "id": "gdpr",
+      "label": "GDPR"
+    }
+  ],
+  "smes": [
+    {
+      "id": "sme-001",
+      "name": "Priya Menon",
+      "domains": [
+        "encryption_at_rest",
+        "encryption_in_transit",
+        "key_management"
+      ]
+    },
+    {
+      "id": "sme-002",
+      "name": "Jordan Avery",
+      "domains": [
+        "dpa",
+        "data_residency",
+        "gdpr"
+      ]
+    },
+    {
+      "id": "sme-003",
+      "name": "Sam Okafor",
+      "domains": [
+        "incident_response",
+        "pentest",
+        "ssdlc"
+      ]
+    },
+    {
+      "id": "sme-004",
+      "name": "Alex Rivera",
+      "domains": [
+        "soc2",
+        "iso27001",
+        "fedramp"
+      ]
+    }
+  ]
+}

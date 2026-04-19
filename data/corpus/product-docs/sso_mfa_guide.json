@@ -1,0 +1,11 @@
+{
+  "document_id": "sso_mfa_guide",
+  "title": "SSO and MFA Integration Guide",
+  "excerpt": "SAML 2.0 and OIDC for customer-initiated SSO. OAuth 2.0 Authorization Code + PKCE for native integrations. SCIM 2.0 for automated provisioning. MFA factors: TOTP, WebAuthn/FIDO2, SMS (not recommended for high-assurance). Hardware keys required for admin roles in Enterprise tier.",
+  "updated_at": "2025-10-20",
+  "topic_ids": [
+    "sso",
+    "mfa",
+    "scim"
+  ]
+}

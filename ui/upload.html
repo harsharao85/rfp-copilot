@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RFP Copilot — Upload</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #f5f5f5; color: #1a1a1a; }
+  header { background: #1a2332; color: white; padding: 16px 24px;
+           display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .badge { background: #6c757d; border-radius: 4px; padding: 2px 8px; font-size: 12px; }
+  header a { color: #aaa; font-size: 13px; text-decoration: none; margin-left: auto; }
+  header a:hover { color: white; }
+  .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+  .config-bar { background: white; border-radius: 8px; padding: 16px;
+                margin-bottom: 20px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .config-bar label { font-size: 13px; color: #666; white-space: nowrap; }
+  .config-bar input { flex: 1; min-width: 200px; padding: 8px; border: 1px solid #ddd;
+                      border-radius: 4px; font-size: 13px; font-family: monospace; }
+  .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;
+         font-size: 13px; font-weight: 500; transition: opacity .15s; }
+  .btn:hover:not(:disabled) { opacity: .85; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-primary { background: #2d9cdb; color: white; }
+  .btn-success { background: #27ae60; color: white; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+  .card { background: white; border-radius: 8px; padding: 20px;
+          margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .card h2 { font-size: 15px; margin-bottom: 12px; }
+  .drop-zone { border: 2px dashed #c0c0c0; border-radius: 8px; padding: 48px;
+               text-align: center; cursor: pointer; transition: all .2s;
+               background: #fafafa; }
+  .drop-zone:hover, .drop-zone.drag-over { border-color: #2d9cdb; background: #eaf5fb; }
+  .drop-zone p { color: #888; font-size: 14px; margin-bottom: 8px; }
+  .drop-zone small { color: #aaa; font-size: 12px; }
+  .status-msg { padding: 12px 16px; border-radius: 6px; font-size: 14px; margin-top: 12px; }
+  .status-ok   { background: #d4edda; color: #155724; }
+  .status-err  { background: #f8d7da; color: #721c24; }
+  .status-info { background: #d1ecf1; color: #0c5460; }
+  .badge-status { display: inline-block; padding: 2px 8px; border-radius: 10px;
+                  font-size: 12px; font-weight: 600; }
+  .s-uploading   { background: #e2e3e5; color: #383d41; }
+  .s-processing  { background: #cce5ff; color: #004085; }
+  .s-waiting     { background: #fff3cd; color: #856404; }
+  .s-succeeded   { background: #c6efce; color: #1e7e34; }
+  .s-failed      { background: #ffc7ce; color: #c0392b; }
+  .progress-row  { display: flex; align-items: center; gap: 12px; margin: 12px 0; }
+  .progress-bar-wrap { flex: 1; height: 6px; background: #eee; border-radius: 3px; overflow: hidden; }
+  .progress-bar { height: 100%; background: #2d9cdb; border-radius: 3px; transition: width .4s; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #eee; color: #666; font-weight: 600; }
+  td { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; }
+  tr:last-child td { border-bottom: none; }
+  .empty-state { text-align: center; padding: 32px; color: #888; font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>RFP Copilot</h1>
+  <span class="badge">Upload</span>
+  <a href="review.html">Review UI →</a>
+</header>
+
+<div class="container">
+  <!-- Upload card -->
+  <div class="card">
+    <h2>Upload RFP</h2>
+    <div class="drop-zone" id="drop-zone" onclick="$('file-input').click()">
+      <p>Drag &amp; drop an <strong>.xlsx</strong> file here, or click to browse</p>
+      <small>Max 10 MB · .xlsx only</small>
+    </div>
+    <input type="file" id="file-input" accept=".xlsx" style="display:none" onchange="handleFile(this.files[0])">
+    <div id="upload-progress"></div>
+    <div id="upload-status"></div>
+  </div>
+
+  <!-- Recent jobs -->
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <h2 style="margin:0">Recent Jobs</h2>
+      <button class="btn btn-sm" style="background:#eee;color:#555" onclick="clearJobs()">Clear list</button>
+    </div>
+    <div id="jobs-list"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const uploadApiUrl = 'https://9fdxjyjafl.execute-api.us-east-1.amazonaws.com';
+const reviewApiUrl = 'https://u6i419jl59.execute-api.us-east-1.amazonaws.com';
+let pollTimer = null;
+
+function init() {
+  setupDrop();
+  renderJobs();
+}
+
+function setupDrop() {
+  const zone = $('drop-zone');
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
+}
+
+async function handleFile(file) {
+  if (!file) return;
+  if (!file.name.endsWith('.xlsx')) {
+    showUploadStatus('Only .xlsx files are supported.', 'err');
+    return;
+  }
+  if (!uploadApiUrl) {
+    showUploadStatus('Enter the Upload API URL above and click Save.', 'err');
+    return;
+  }
+
+  clearPoll();
+  setProgress(5, 'Requesting upload URL…');
+  showUploadStatus('', '');
+
+  try {
+    // 1. Presign
+    const presignRes = await uploadApiCall('/upload/presign', 'POST', { filename: file.name });
+    const { uploadUrl, jobId } = presignRes;
+    setProgress(20, `Uploading ${file.name}…`);
+
+    // 2. PUT directly to S3 — Content-Type must match what was signed in the presigned URL.
+    const s3Res = await fetch(uploadUrl, {
+      method: 'PUT',
+      body: await file.arrayBuffer(),
+      headers: { 'Content-Type': 'application/octet-stream' },
+    });
+    if (!s3Res.ok) throw new Error(`S3 upload failed: ${s3Res.status}`);
+    setProgress(60, 'Upload complete. Starting pipeline…');
+
+    // 3. Start pipeline
+    await uploadApiCall(`/upload/${jobId}/start`, 'POST');
+    setProgress(80, 'Pipeline started. Polling status…');
+    saveJob({ jobId, filename: file.name, startedAt: new Date().toISOString(), status: 'PROCESSING' });
+    renderJobs();
+
+    // 4. Poll status
+    pollStatus(jobId);
+  } catch(e) {
+    setProgress(0, '');
+    showUploadStatus(`Error: ${e.message}`, 'err');
+  }
+}
+
+function pollStatus(jobId) {
+  clearPoll();
+  pollTimer = setInterval(async () => {
+    try {
+      const data = await uploadApiCall(`/upload/${jobId}/status`);
+      updateJobStatus(jobId, data.status);
+      renderJobs();
+      handleStatusTransition(jobId, data);
+    } catch(e) {
+      // transient error — keep polling
+    }
+  }, 5000);
+}
+
+function handleStatusTransition(jobId, data) {
+  const status = data.status;
+  if (status === 'WAITING_FOR_REVIEW') {
+    clearPoll();
+    setProgress(100, '');
+    const reviewLink = reviewApiUrl
+      ? `review.html?api=${encodeURIComponent(reviewApiUrl)}&job=${encodeURIComponent(jobId)}`
+      : `review.html`;
+    showUploadStatus(
+      `Pipeline paused for review. <a href="${reviewLink}" style="color:#155724;font-weight:600">Open Review UI →</a>`,
+      'ok'
+    );
+  } else if (status === 'SUCCEEDED') {
+    clearPoll();
+    setProgress(100, '');
+    showUploadStatus(
+      `<span style="margin-right:12px">✓ Pipeline complete.</span>` +
+      `<button class="btn btn-success btn-sm" onclick="downloadOutput('${jobId}')">Download Answered RFP ↓</button>`,
+      'ok'
+    );
+  } else if (status === 'FAILED') {
+    clearPoll();
+    setProgress(0, '');
+    showUploadStatus('Pipeline failed. Check CloudWatch logs for details.', 'err');
+  } else {
+    setProgress(85, `Status: ${status}…`);
+  }
+}
+
+async function downloadOutput(jobId) {
+  try {
+    const data = await uploadApiCall(`/upload/${jobId}/download`);
+    window.open(data.downloadUrl, '_blank');
+  } catch(e) {
+    alert(`Download error: ${e.message}`);
+  }
+}
+
+async function uploadApiCall(path, method = 'GET', body = null) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(uploadApiUrl + path, opts);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+function setProgress(pct, msg) {
+  $('upload-progress').innerHTML = pct > 0 ? `
+    <div class="progress-row">
+      <div class="progress-bar-wrap">
+        <div class="progress-bar" style="width:${pct}%"></div>
+      </div>
+      <span style="font-size:12px;color:#666;white-space:nowrap">${escHtml(msg)}</span>
+    </div>` : '';
+}
+
+function showUploadStatus(html, type) {
+  $('upload-status').innerHTML = html
+    ? `<div class="status-msg status-${type || 'info'}">${html}</div>`
+    : '';
+}
+
+// ----- Local job store -----
+function saveJob(job) {
+  const jobs = getJobs();
+  const idx = jobs.findIndex(j => j.jobId === job.jobId);
+  if (idx >= 0) jobs[idx] = { ...jobs[idx], ...job };
+  else jobs.unshift(job);
+  localStorage.setItem('rfp_jobs', JSON.stringify(jobs.slice(0, 20)));
+}
+
+function updateJobStatus(jobId, status) {
+  const jobs = getJobs();
+  const job = jobs.find(j => j.jobId === jobId);
+  if (job) { job.status = status; localStorage.setItem('rfp_jobs', JSON.stringify(jobs)); }
+}
+
+function getJobs() {
+  try { return JSON.parse(localStorage.getItem('rfp_jobs') || '[]'); } catch { return []; }
+}
+
+function statusBadge(s) {
+  const map = {
+    UPLOADING: 's-uploading', PROCESSING: 's-processing',
+    WAITING_FOR_REVIEW: 's-waiting', SUCCEEDED: 's-succeeded', FAILED: 's-failed',
+  };
+  const cls = map[s] || 's-uploading';
+  return `<span class="badge-status ${cls}">${s}</span>`;
+}
+
+function renderJobs() {
+  const jobs = getJobs();
+  if (!jobs.length) {
+    $('jobs-list').innerHTML = '<div class="empty-state">No jobs yet. Upload an RFP to get started.</div>';
+    return;
+  }
+  const rows = jobs.map(j => {
+    const ts = j.startedAt ? new Date(j.startedAt).toLocaleString() : '';
+    let actions = '';
+    if (j.status === 'WAITING_FOR_REVIEW' && reviewApiUrl) {
+      const link = `review.html?api=${encodeURIComponent(reviewApiUrl)}&job=${encodeURIComponent(j.jobId)}`;
+      actions = `<a href="${link}" class="btn btn-primary btn-sm">Review →</a>`;
+    } else if (j.status === 'SUCCEEDED') {
+      actions = `<button class="btn btn-success btn-sm" onclick="downloadOutput('${j.jobId}')">Download ↓</button>`;
+    }
+    return `<tr>
+      <td style="font-family:monospace">${escHtml(j.jobId)}</td>
+      <td>${escHtml(j.filename || '')}</td>
+      <td>${statusBadge(j.status || 'UNKNOWN')}</td>
+      <td>${ts}</td>
+      <td>${actions}</td>
+    </tr>`;
+  }).join('');
+  $('jobs-list').innerHTML = `<table>
+    <thead><tr><th>Job ID</th><th>File</th><th>Status</th><th>Started</th><th>Actions</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function clearJobs() {
+  localStorage.removeItem('rfp_jobs');
+  renderJobs();
+}
+
+function clearPoll() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+init();
+</script>
+</body>
+</html>

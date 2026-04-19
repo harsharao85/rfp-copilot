@@ -1,0 +1,12 @@
+{
+  "document_id": "acme_financial_soc2_answer",
+  "title": "Prior answer \u2014 Acme Financial: SOC 2 scope (STALE \u2014 cert updated after approval)",
+  "excerpt": "SOC 2 Type II audit covers Security, Availability, and Confidentiality trust principles. Most recent audit period ended June 2025. Report available under NDA.",
+  "approved_at": "2025-07-01",
+  "corroborated_by": [
+    "compliance/soc2_cert_2025.json"
+  ],
+  "topic_ids": [
+    "soc2"
+  ]
+}

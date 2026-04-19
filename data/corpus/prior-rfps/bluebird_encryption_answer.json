@@ -1,0 +1,13 @@
+{
+  "document_id": "bluebird_encryption_answer",
+  "title": "Prior answer \u2014 Bluebird Insurance: encryption at rest (STALE \u2014 whitepaper updated)",
+  "excerpt": "Customer data encrypted at rest using AES-256-GCM. Key management via AWS KMS. Enterprise BYOK available via CMK. Key rotation enabled.",
+  "approved_at": "2025-08-15",
+  "corroborated_by": [
+    "product-docs/encryption_whitepaper.json"
+  ],
+  "topic_ids": [
+    "encryption_at_rest",
+    "key_management"
+  ]
+}

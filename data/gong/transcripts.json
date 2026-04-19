@@ -1,0 +1,43 @@
+[
+  {
+    "call_id": "gong-call-001",
+    "title": "Discovery call \u2014 prospect asks about FedRAMP timeline",
+    "date": "2026-04-02",
+    "participants": [
+      "AE: Jordan Avery",
+      "SE: Priya Menon",
+      "Prospect: VP InfoSec"
+    ],
+    "snippets": [
+      "Prospect asked when FedRAMP Moderate authorization will be live. Priya responded that the ATO assessment is in progress and she would not commit to a specific date in writing.",
+      "Prospect pushed for an SLA with financial penalties; Jordan redirected to standard 99.9% SLA and noted financial penalties are negotiated at contract."
+    ]
+  },
+  {
+    "call_id": "gong-call-002",
+    "title": "Technical deep-dive \u2014 encryption and key management",
+    "date": "2026-03-25",
+    "participants": [
+      "SE: Priya Menon",
+      "Prospect: Security Architect"
+    ],
+    "snippets": [
+      "Discussed BYOK via AWS KMS CMK in the customer's account. Confirmed that key deletion by the customer results in data becoming unreadable within the SLA window.",
+      "Confirmed that all data-in-transit uses TLS 1.2 minimum, with HSTS, and that TLS 1.0/1.1 have been deprecated end-to-end."
+    ]
+  },
+  {
+    "call_id": "gong-call-003",
+    "title": "Procurement call \u2014 DPA and sub-processors",
+    "date": "2026-04-07",
+    "participants": [
+      "AE: Jordan Avery",
+      "Legal: Sam Okafor",
+      "Prospect: Procurement Lead"
+    ],
+    "snippets": [
+      "Walked through standard DPA. Confirmed EU SCCs are incorporated. Public sub-processor list is updated with 30-day advance notice of changes.",
+      "Prospect asked to add a specific customer logo to the reference list. Jordan deferred pending approval from the reference customer."
+    ]
+  }
+]

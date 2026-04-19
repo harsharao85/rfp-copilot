@@ -1,0 +1,13 @@
+{
+  "document_id": "northwind_sso_answer",
+  "title": "Prior answer \u2014 Northwind Capital: SSO protocols (FRESH \u2014 approved after source)",
+  "excerpt": "SAML 2.0 and OIDC supported for customer-initiated SSO. SCIM 2.0 for automated user provisioning. OAuth 2.0 Authorization Code + PKCE for native integrations.",
+  "approved_at": "2026-01-15",
+  "corroborated_by": [
+    "product-docs/sso_mfa_guide.json"
+  ],
+  "topic_ids": [
+    "sso",
+    "scim"
+  ]
+}

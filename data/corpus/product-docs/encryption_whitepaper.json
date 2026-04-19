@@ -1,0 +1,11 @@
+{
+  "document_id": "encryption_whitepaper",
+  "title": "Encryption Architecture Whitepaper",
+  "excerpt": "AES-256-GCM encryption at rest. AWS KMS managed keys; BYOK via customer CMK in customer's AWS account with key-policy binding. Key rotation: annual by default, on-demand via KMS API. TLS 1.2+ in transit with PFS (ECDHE cipher suites), HSTS one-year max-age, TLS 1.0/1.1 disabled.",
+  "updated_at": "2025-09-05",
+  "topic_ids": [
+    "encryption_at_rest",
+    "encryption_in_transit",
+    "key_management"
+  ]
+}

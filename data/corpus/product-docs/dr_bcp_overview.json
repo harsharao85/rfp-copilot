@@ -1,0 +1,9 @@
+{
+  "document_id": "dr_bcp_overview",
+  "title": "Disaster Recovery and BCP Overview",
+  "excerpt": "Active-active deployment across two AWS regions. Synchronous replication of critical metadata; asynchronous replication < 60 s for bulk data. Target RTO: 4 hours. Target RPO: 15 minutes. DR exercises twice annually. Customer SLA: 99.9% monthly uptime (Enterprise tier). Backups: daily snapshots retained 90 days.",
+  "updated_at": "2025-11-10",
+  "topic_ids": [
+    "dr_bcp"
+  ]
+}

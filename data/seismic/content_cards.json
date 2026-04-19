@@ -1,0 +1,37 @@
+[
+  {
+    "card_id": "seismic-card-001",
+    "title": "Enterprise Security Overview One-Pager",
+    "body": "High-level customer-facing overview: SOC 2 Type II (Trust Principles: Security, Availability, Confidentiality), ISO 27001, active FedRAMP Moderate authorization in progress. Encryption at rest AES-256-GCM, in transit TLS 1.2+. MFA mandatory for admin roles.",
+    "updated_at": "2026-03-07",
+    "owner": "Product Marketing"
+  },
+  {
+    "card_id": "seismic-card-002",
+    "title": "FAQ \u2014 Reference Customer Stories (Financial Services)",
+    "body": "Approved public references in the financial services vertical include logos listed in our public customer page. Manager must consult the Reference Customer List in Neptune before naming any customer in an outbound document.",
+    "updated_at": "2026-03-27",
+    "owner": "Sales Enablement"
+  },
+  {
+    "card_id": "seismic-card-003",
+    "title": "Data Residency Configuration Matrix",
+    "body": "Tenant creation supports region selection among us-east-1, us-west-2, eu-west-1, eu-central-1, ap-southeast-2. Cross-region replication is an opt-in feature for DR. Residency is enforced at the storage layer via KMS CMK scoping.",
+    "updated_at": "2025-12-27",
+    "owner": "Security Engineering"
+  },
+  {
+    "card_id": "seismic-card-004",
+    "title": "SSDLC Summary Deck",
+    "body": "Secure SDLC aligned to OWASP SAMM. SAST: Semgrep. SCA: Snyk. Container scanning: Trivy + ECR scan. Threat modeling: STRIDE per service. Annual third-party pentest. SBOM generated per build.",
+    "updated_at": "2025-10-18",
+    "owner": "Application Security"
+  },
+  {
+    "card_id": "seismic-card-005",
+    "title": "Pricing \u2014 Internal Only (DO NOT SHARE)",
+    "body": "Enterprise tier list price is $X per user per month with standard volume tiers. All pricing must be validated by Deal Desk before appearing in customer-facing documents.",
+    "updated_at": "2026-03-17",
+    "owner": "Deal Desk"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "document_id": "globex_fedramp_answer",
+  "title": "Prior answer \u2014 Globex: FedRAMP status (STALE \u2014 status doc updated after approval)",
+  "excerpt": "FedRAMP Moderate ATO assessment is in progress. Third-party assessment organization has been engaged. No committed timeline for authorization.",
+  "approved_at": "2026-02-01",
+  "corroborated_by": [
+    "compliance/fedramp_status_2026.json"
+  ],
+  "topic_ids": [
+    "fedramp"
+  ]
+}

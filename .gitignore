@@ -1,0 +1,48 @@
+# Node / CDK
+node_modules/
+cdk.out/
+*.d.ts
+*.js.map
+infra/**/*.js
+!infra/jest.config.js
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Build / package
+dist/
+build/
+*.egg
+.pip-cache/
+
+# Local output
+data/output/
+*.local.env
+.env
+.env.*
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# AWS
+.aws-sam/
+samconfig.toml
+
+# Secrets
+*.pem
+*.key
+secrets.json
+
+# Logs
+*.log
+logs/
