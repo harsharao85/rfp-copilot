@@ -24,7 +24,6 @@ logger = configure_logging()
 ddb = boto3.resource("dynamodb")
 sfn = boto3.client("stepfunctions")
 s3 = boto3.client("s3")
-bedrock_agent = boto3.client("bedrock-agent")
 
 CORS = {
     "Access-Control-Allow-Origin": "*",
@@ -134,15 +133,13 @@ def _emit_sme_approved_to_kb(
     answer_map: dict[str, str],
     now_iso: str,
 ) -> None:
-    """Write each SME-reviewed Q&A to S3 as markdown + Bedrock metadata sidecar,
-    then trigger a KB ingestion job. Fire-and-forget on the ingestion side — the
-    approval benefits future RFPs, not the in-flight one, so a ~1-3 minute
-    index lag is acceptable. Called *after* send_task_success so execution is
-    resumed even if this write fails.
+    """Write each SME-reviewed Q&A to S3 as markdown + Bedrock metadata sidecar.
+    The PutObject events fire the ingestion_trigger Lambda automatically
+    (subscribed to this bucket in orchestration-stack), so no explicit
+    StartIngestionJob call is needed here. Approval benefits future RFPs,
+    not the in-flight one — a ~1-3 minute index lag is acceptable.
     """
     bucket = os.environ["REFERENCE_CORPUS_BUCKET"]
-    kb_id  = os.environ["KNOWLEDGE_BASE_ID"]
-    ds_id  = os.environ["DATA_SOURCE_ID"]
     approved_at_date = now_iso[:10]  # sidecar uses ISO date for lexicographic compare
     expires_on = (datetime.now(timezone.utc) + timedelta(days=730)).date().isoformat()
 
@@ -195,16 +192,6 @@ def _emit_sme_approved_to_kb(
                       ContentType="application/json")
         written += 1
 
-    if written:
-        try:
-            resp = bedrock_agent.start_ingestion_job(knowledgeBaseId=kb_id, dataSourceId=ds_id)
-            logger.info("review_api.ingestion_started", job_id=job_id,
-                        count=written, ingestion_job_id=resp["ingestionJob"]["ingestionJobId"])
-        except Exception as exc:
-            # Common case: another ingestion job is already running. The S3
-            # writes are durable — the next ingestion sweep will pick them up.
-            logger.warning("review_api.ingestion_trigger_deferred",
-                           job_id=job_id, count=written, error=str(exc))
     logger.info("review_api.sme_approved_written", job_id=job_id, count=written)
 
 

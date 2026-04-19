@@ -20,15 +20,18 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     prior_matches = [PriorAnswerMatch(**m) for m in event["retrieval"]["prior_matches"]]
     generated = GeneratedAnswer(**event["generation"])
     guardrail_flags = event.get("guardrail_flags", [])
+    topic_class = event["retrieval"].get("topic_class", "unclassified")
 
     composite, breakdown, tier = score(
         passages=passages,
         prior_matches=prior_matches,
         generated=generated,
         guardrail_flags=guardrail_flags,
+        topic_class=topic_class,
     )
 
-    log.info("score.computed", composite=composite, tier=tier.value, **breakdown.model_dump())
+    log.info("score.computed", topic_class=topic_class, composite=composite,
+             tier=tier.value, **breakdown.model_dump())
 
     return {
         "composite": composite,

@@ -93,8 +93,8 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     log.info(
         "classifier.topics",
         topics=topics,
+        topic_class=dispatch_plan.topic_class,
         force_tier=dispatch_plan.force_tier.value if dispatch_plan.force_tier else None,
-        corroboration_required=dispatch_plan.corroboration_required,
     )
 
     # Skip LLM decomposition if force_tier is set — no point generating answers

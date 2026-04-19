@@ -1,187 +1,183 @@
-"""Source-authority dispatch table.
+"""Source-authority dispatch table — class-based (Phase G).
 
-Maps topic IDs to DispatchPlan instances that declare which sources are
-authoritative (primary), which are phrasing-reference only (secondary),
-and which are contextual enrichment (tertiary).
+Four classes replace the per-topic dispatch explosion:
 
-This is hardcoded for the demo tier. Production path: promote to
-config/source_authority.yaml, reviewed quarterly by Product Marketing +
-Compliance + General Counsel (docs/architecture.md §5.3).
+  auth_compliance  compliance_store is authoritative. SOC 2 / ISO 27001 / FedRAMP /
+                   GDPR / DPA / incident response / pentest. GREEN if primary
+                   retrieves, AMBER if it doesn't. No sme_approved_answer query
+                   (no SME decay risk on authoritative topics).
+
+  auth_product     product_docs is authoritative (sometimes compounded with
+                   compliance_store for dr_bcp / data_residency). Encryption,
+                   SSO, MFA, SCIM, DR, SSDLC, SBOM, residency. Same tier logic
+                   as auth_compliance.
+
+  gated            pricing → RED forced (deal_desk owns). customer_reference →
+                   hard rule #4 decides.
+
+  unclassified     Default fallback. Full composite scored, but tier is capped
+                   at AMBER regardless — human review always required because
+                   no authoritative source has been identified.
+
+Each class has one source config that all its member topics share. Merging
+behavior: if a question matches multiple topics across classes, the most-
+restrictive class wins (gated > auth_compliance > auth_product > unclassified)
+and primary/secondary/tertiary source lists are unioned.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from shared.models import DispatchPlan, Tier
 
-# ---------------------------------------------------------------------------
-# Dispatch table — one entry per topic_id used by the classifier.
-# Sources available in the demo tier:
-#   compliance_store   S3 prefix compliance/  (SOC2 bridge, ISO cert PDFs + JSON sidecars)
-#   product_docs       S3 prefix product-docs/ (whitepapers, feature markdown)
-#   prior_rfps         S3 prefix prior-rfps/   (phrasing reference ONLY — never factual authority)
-#   customer_refs_db   DynamoDB CustomerRefs   (hard-rule #4 gate)
-#   seismic            mock_sources Lambda /seismic/content  (Phase C)
-#   gong               mock_sources Lambda /gong/calls       (Phase C)
-#   deal_desk          not wired in demo — pricing always force_tier=RED
-# ---------------------------------------------------------------------------
 
-DISPATCH_TABLE: dict[str, DispatchPlan] = {
-    # Compliance certifications — compliance_store is the only factual authority.
-    "soc2": DispatchPlan(
-        primary=["compliance_store"],
-        secondary=["prior_rfps"],
-        tertiary=["seismic"],
-        corroboration_required=True,
-        max_tier_without_primary=Tier.AMBER,
-    ),
-    "iso27001": DispatchPlan(
-        primary=["compliance_store"],
-        secondary=["prior_rfps"],
-        corroboration_required=True,
-        max_tier_without_primary=Tier.AMBER,
-    ),
-    "fedramp": DispatchPlan(
-        primary=["compliance_store"],
-        secondary=["prior_rfps"],
-        corroboration_required=True,
-        max_tier_without_primary=Tier.AMBER,
-    ),
-    "gdpr": DispatchPlan(
-        primary=["compliance_store"],
-        secondary=["prior_rfps"],
-        corroboration_required=True,
-        max_tier_without_primary=Tier.AMBER,
-    ),
-    "dpa": DispatchPlan(
-        primary=["compliance_store"],
-        secondary=["prior_rfps"],
-        corroboration_required=True,
-        max_tier_without_primary=Tier.AMBER,
-    ),
+@dataclass(frozen=True)
+class _ClassConfig:
+    primary: tuple[str, ...]
+    secondary: tuple[str, ...] = ()
+    tertiary: tuple[str, ...] = ()
+    force_tier: Tier | None = None
+    reason: str | None = None
+    # Topics that carry extra primaries (e.g. dr_bcp pulls compliance too).
+    # Maps topic_id → additional primary sources.
+    extra_primary_by_topic: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Topics that carry extra tertiaries (e.g. sso/mfa pull seismic).
+    extra_tertiary_by_topic: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
-    # Encryption and key management — product_docs is authoritative.
-    "encryption_at_rest": DispatchPlan(
-        primary=["product_docs"],
-        secondary=["prior_rfps"],
-        corroboration_required=True,
-    ),
-    "encryption_in_transit": DispatchPlan(
-        primary=["product_docs"],
-        secondary=["prior_rfps"],
-        corroboration_required=True,
-    ),
-    "key_management": DispatchPlan(
-        primary=["product_docs"],
-        secondary=["prior_rfps"],
-        corroboration_required=True,
-    ),
 
-    # Identity and access — product_docs + optional Seismic enrichment.
-    "sso": DispatchPlan(
-        primary=["product_docs"],
-        secondary=["prior_rfps"],
-        tertiary=["seismic"],
+CLASS_CONFIGS: dict[str, _ClassConfig] = {
+    "auth_compliance": _ClassConfig(
+        primary=("compliance_store",),
+        secondary=("prior_rfps",),
     ),
-    "mfa": DispatchPlan(
-        primary=["product_docs"],
-        secondary=["prior_rfps"],
-        tertiary=["seismic"],
+    "auth_product": _ClassConfig(
+        primary=("product_docs",),
+        secondary=("prior_rfps",),
+        extra_primary_by_topic={
+            "dr_bcp":         ("compliance_store",),
+            "data_residency": ("compliance_store",),
+        },
+        extra_tertiary_by_topic={
+            "sso": ("seismic",),
+            "mfa": ("seismic",),
+        },
     ),
-    "scim": DispatchPlan(
-        primary=["product_docs"],
-        secondary=["prior_rfps"],
+    "gated": _ClassConfig(
+        primary=(),  # set per topic below
+        force_tier=None,
     ),
-
-    # Operational resilience.
-    "dr_bcp": DispatchPlan(
-        primary=["product_docs", "compliance_store"],
-        secondary=["prior_rfps"],
-        corroboration_required=True,
-        max_tier_without_primary=Tier.AMBER,
-    ),
-    "incident_response": DispatchPlan(
-        primary=["compliance_store"],
-        secondary=["prior_rfps"],
-        corroboration_required=True,
-        max_tier_without_primary=Tier.AMBER,
-    ),
-
-    # Secure development.
-    "ssdlc": DispatchPlan(
-        primary=["product_docs"],
-        secondary=["prior_rfps"],
-    ),
-    "pentest": DispatchPlan(
-        primary=["compliance_store"],
-        secondary=["prior_rfps"],
-        corroboration_required=True,
-        max_tier_without_primary=Tier.AMBER,
-    ),
-    "sbom": DispatchPlan(
-        primary=["product_docs"],
-        secondary=["prior_rfps"],
-    ),
-
-    # Data residency — both compliance and product docs are authoritative.
-    "data_residency": DispatchPlan(
-        primary=["compliance_store", "product_docs"],
-        secondary=["prior_rfps"],
-        corroboration_required=True,
-        max_tier_without_primary=Tier.AMBER,
-    ),
-
-    # Pricing — never auto-generated. Commercial desk owns.
-    "pricing": DispatchPlan(
-        primary=["deal_desk"],
-        force_tier=Tier.RED,
-        reason="pricing_never_autogenerated",
-    ),
-
-    # Customer references — CustomerRefs DB is the only authority.
-    "customer_reference": DispatchPlan(
-        primary=["customer_refs_db"],
-        tertiary=["prior_rfps"],  # phrasing reference only
+    "unclassified": _ClassConfig(
+        primary=("product_docs",),
+        secondary=("prior_rfps",),
+        tertiary=("seismic",),
     ),
 }
 
-# Used when no topic matches. Searches product_docs as a reasonable default.
+
+# Topic-to-class membership. One mapping, easy to audit and extend.
+TOPIC_CLASS: dict[str, str] = {
+    # auth_compliance
+    "soc2":              "auth_compliance",
+    "iso27001":          "auth_compliance",
+    "fedramp":           "auth_compliance",
+    "gdpr":              "auth_compliance",
+    "dpa":               "auth_compliance",
+    "incident_response": "auth_compliance",
+    "pentest":           "auth_compliance",
+    # auth_product
+    "encryption_at_rest":    "auth_product",
+    "encryption_in_transit": "auth_product",
+    "key_management":        "auth_product",
+    "sso":                   "auth_product",
+    "mfa":                   "auth_product",
+    "scim":                  "auth_product",
+    "dr_bcp":                "auth_product",
+    "ssdlc":                 "auth_product",
+    "sbom":                  "auth_product",
+    "data_residency":        "auth_product",
+    # gated
+    "pricing":            "gated",
+    "customer_reference": "gated",
+}
+
+
+# Class priority for merging (lower index = more restrictive).
+_CLASS_PRIORITY = ["gated", "auth_compliance", "auth_product", "unclassified"]
+
+
+def _plan_for_topic(topic: str) -> DispatchPlan:
+    cls = TOPIC_CLASS.get(topic, "unclassified")
+    cfg = CLASS_CONFIGS[cls]
+
+    if cls == "gated" and topic == "pricing":
+        return DispatchPlan(
+            topic_class=cls,
+            primary=["deal_desk"],
+            force_tier=Tier.RED,
+            reason="pricing_never_autogenerated",
+        )
+    if cls == "gated" and topic == "customer_reference":
+        return DispatchPlan(
+            topic_class=cls,
+            primary=["customer_refs_db"],
+            tertiary=["prior_rfps"],
+        )
+
+    extra_primary = cfg.extra_primary_by_topic.get(topic, ())
+    extra_tertiary = cfg.extra_tertiary_by_topic.get(topic, ())
+    return DispatchPlan(
+        topic_class=cls,
+        primary=list(cfg.primary) + list(extra_primary),
+        secondary=list(cfg.secondary),
+        tertiary=list(cfg.tertiary) + list(extra_tertiary),
+        force_tier=cfg.force_tier,
+        reason=cfg.reason,
+    )
+
+
+# Back-compat: tests and any downstream code still reference DISPATCH_TABLE.
+DISPATCH_TABLE: dict[str, DispatchPlan] = {
+    topic: _plan_for_topic(topic) for topic in TOPIC_CLASS
+}
+
+
 DEFAULT_DISPATCH_PLAN = DispatchPlan(
-    primary=["product_docs"],
-    secondary=["prior_rfps"],
-    tertiary=["seismic"],
-    corroboration_required=False,
+    topic_class="unclassified",
+    primary=list(CLASS_CONFIGS["unclassified"].primary),
+    secondary=list(CLASS_CONFIGS["unclassified"].secondary),
+    tertiary=list(CLASS_CONFIGS["unclassified"].tertiary),
 )
 
 
 def get_dispatch_plan(topics: list[str]) -> DispatchPlan:
-    """Merge dispatch plans for all matched topics. Most restrictive settings win.
+    """Merge dispatch plans across matched topics.
 
-    Source lists are unioned in order (primary, secondary, tertiary).
-    force_tier propagates if any topic forces it.
-    corroboration_required=True if any topic requires it.
-    max_tier_without_primary takes the strictest (lowest) tier.
+    Class is the most-restrictive among matched topics (gated wins, then
+    auth_compliance, then auth_product, then unclassified). Source lists
+    are unioned preserving order. force_tier propagates if any topic
+    forces one.
     """
     plans = [DISPATCH_TABLE[t] for t in topics if t in DISPATCH_TABLE]
     if not plans:
         return DEFAULT_DISPATCH_PLAN
 
-    tier_order = {Tier.GREEN: 2, Tier.AMBER: 1, Tier.RED: 0}
+    def _class_rank(plan: DispatchPlan) -> int:
+        return _CLASS_PRIORITY.index(plan.topic_class)
 
-    def _union(field: str) -> list[str]:
+    merged_class = min(plans, key=_class_rank).topic_class
+
+    def _union(field_name: str) -> list[str]:
         seen: dict[str, None] = {}
         for p in plans:
-            for s in getattr(p, field):
+            for s in getattr(p, field_name):
                 seen[s] = None
         return list(seen)
 
     return DispatchPlan(
+        topic_class=merged_class,
         primary=_union("primary"),
         secondary=_union("secondary"),
         tertiary=_union("tertiary"),
-        corroboration_required=any(p.corroboration_required for p in plans),
-        max_tier_without_primary=min(
-            (p.max_tier_without_primary for p in plans),
-            key=lambda t: tier_order[t],
-        ),
         force_tier=next((p.force_tier for p in plans if p.force_tier), None),
         reason="; ".join(p.reason for p in plans if p.reason) or None,
     )

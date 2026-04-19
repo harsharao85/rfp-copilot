@@ -83,6 +83,11 @@ export class StorageStack extends cdk.Stack {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       versioned: true,
+      // Publishes PutObject events to EventBridge. Downstream consumer
+      // (orchestration-stack's ingestion_trigger Lambda) subscribes via an
+      // EventBridge rule — no cross-stack dependency cycle that direct Lambda
+      // notifications would create.
+      eventBridgeEnabled: true,
     });
 
     this.outputBucket = new s3.Bucket(this, 'OutputBucket', {

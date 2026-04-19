@@ -75,7 +75,17 @@ The Karpathy guidelines govern *how*; the non-negotiable design decisions and ha
 2. **Generation:** Amazon Bedrock with **Claude Sonnet 4.6** for synthesis, **Claude Haiku 4.5** for classification. Prompt caching on the stable system prefix is mandatory. Bedrock Guardrails applied on every `InvokeModel`.
 3. **Orchestration:** Step Functions Standard (need `waitForTaskToken` for SME review + full audit trail). Plain `Map` state at demo scale; Distributed Map is deferred.
 4. **Source authority — the key differentiator.** Every topic maps to a dispatch plan declaring Primary (authoritative) + Secondary (phrasing) + Tertiary (context) sources. **Prior RFPs are NEVER treated as factual authority** — they are a phrasing reference only. Freshness suppression rule: if a Primary source's `updated_at` is more recent than a prior RFP's `approved_at`, the prior is suppressed from retrieval.
-4a. **Retrieval (single surface):** Bedrock Knowledge Base backed by **S3 Vectors** (1024-dim Titan Embed v2). One KB indexes all four S3-backed source prefixes (`compliance/`, `product-docs/`, `prior-rfps/`, `sme-approved/`); the retriever calls `bedrock-agent-runtime:Retrieve` with a `source_type` metadata filter to discriminate. Primary/secondary/tertiary passages come back as regular `RetrievedPassage` objects; the H signal is a separate KB query filtered to `sme_approved_answer` and mapped into `PriorAnswerMatch` objects with real cosine scores. **There is no DynamoDB LibraryFeedback** — approvals write directly to S3 + trigger a KB ingestion job. Index must declare `AMAZON_BEDROCK_TEXT` and `AMAZON_BEDROCK_METADATA` as `nonFilterableMetadataKeys`. OpenSearch Serverless is the documented scale-up trigger.
+4a. **Retrieval (single surface, class-based dispatch — Phase G):** Bedrock Knowledge Base backed by **S3 Vectors** (1024-dim Titan Embed v2). One KB indexes all four S3-backed prefixes (`compliance/`, `product-docs/`, `prior-rfps/`, `sme-approved/`); the retriever calls `bedrock-agent-runtime:Retrieve` with a `source_type` metadata filter to discriminate.
+
+Four topic classes drive tier logic (see `lambdas/question_classifier/dispatch.py` and `docs/architecture.md` §5):
+  - `auth_compliance` — compliance-store primary. GREEN if primary retrieves, AMBER otherwise. `sme_approved_answer` NOT queried.
+  - `auth_product` — product-docs primary (+ compliance for dr_bcp/data_residency). Same tier logic. `sme_approved_answer` NOT queried.
+  - `gated` — pricing → force_tier RED; customer_reference → hard rule 4.
+  - `unclassified` — composite-scored, tier capped at AMBER regardless of composite. `sme_approved_answer` IS queried; this is where the flywheel runs.
+
+**Freshness suppression (`_apply_freshness_suppression`) is deleted.** Source currency is enforced by event-driven auto-ingestion (S3 PutObject → EventBridge → `ingestion_trigger` Lambda) plus weekly + yearly safety-net EventBridge schedules. Per-query freshness comparison is not needed when all source objects auto-reindex on upload.
+
+Index must declare `AMAZON_BEDROCK_TEXT` and `AMAZON_BEDROCK_METADATA` as `nonFilterableMetadataKeys`. OpenSearch Serverless is the documented scale-up trigger.
 5. **Confidence composite:** `0.45·H + 0.25·R + 0.15·C + 0.10·F + 0.05·G`. Never LLM self-reported. Thresholds ≥0.80 green, 0.55–0.80 amber, <0.55 red. H=0 caps at amber.
 6. **Hard rules (enterprise-legal, not AI-safety):**
    - Pricing / commercial → forced RED. Commercial desk owns.
@@ -84,7 +94,7 @@ The Karpathy guidelines govern *how*; the non-negotiable design decisions and ha
    - Forward-looking ("will deliver by Q3") → minimum AMBER.
    - Competitor disparagement → forced RED.
    Changes require General Counsel review. Tests in `lambdas/tests/test_hard_rules.py` lock behavior — **do not relax assertions to make tests pass**.
-7. **Flywheel with provenance (Phase F: query-time staleness).** Every SME-approved answer records the Primary sources that corroborated it at approval time (`corroborated_by` sidecar field). Freshness suppression runs at *retrieval time* — the retriever's `_apply_freshness_suppression` compares each approved answer's `approved_at` against the freshest primary's `updated_at` in the same query. Stale approvals drop out of the H signal for that query without requiring a separate daemon. The staleness-daemon Lambda was removed in Phase F.
+7. **Flywheel with provenance (Phase G scope: unclassified topics only).** SME approvals write Q&A markdown + sidecar to `sme-approved/` in the reference corpus bucket; an S3 PutObject → EventBridge event triggers the `ingestion_trigger` Lambda which calls `bedrock-agent:StartIngestionJob` (fire-and-forget). The approval becomes retrievable in ~1–3 min. **The flywheel only feeds the H signal for `unclassified` topics.** For `auth_compliance` and `auth_product` topics, SME-approved answers are not queried at all — misinformation can't propagate into primary-backed answers, and stale approvals can't decay green tiers on authoritative topics. Weekly + yearly EventBridge schedules provide safety-net re-ingestion. The staleness-daemon and query-time freshness-suppression code are both deleted.
 8. **Data hygiene.** Synthetic data only — fully fictitious. No real customer names. Incoming RFPs are NDA-protected and never auto-ingest into the reference corpus.
 9. **IaC:** CDK v2 in TypeScript. Lambda source in Python 3.12 with `openpyxl`, `pydantic`, `boto3`, `structlog`.
 
@@ -99,14 +109,15 @@ The Karpathy guidelines govern *how*; the non-negotiable design decisions and ha
 - **Bedrock Agents / AgentCore.** Deliberate determinism — see `docs/architecture.md` §15 for the reasoning and when to add agents.
 - **React SME review UI polish.** A minimal working UI is in scope; heavy polish is deferred.
 
-## Current status (v0.5 deployed, 2026-04-19 — post Phase F)
+## Current status (v0.5 deployed, 2026-04-19 — post Phase G)
 
-v0.5 is live in `us-east-1`. Two sequenced refactors landed today:
+v0.5 is live in `us-east-1`. Three sequenced refactors landed in this session arc:
 
-- **Phase A-E (earlier session):** retrieval re-platformed from the placeholder S3-keyword scan to Bedrock KB + S3 Vectors. See `plans/image-7-still-no-snazzy-fairy.md`.
-- **Phase F (this session):** single retrieval surface. LibraryFeedback DynamoDB table deleted; SME-approved Q&A moved to the KB under `sme-approved/` prefix. Staleness daemon deleted. H signal is now real cosine similarity against the KB's `sme_approved_answer` slice, not a topic-tag overlap with fake 0.82.
+- **Phase A-E:** retrieval re-platformed from the placeholder S3-keyword scan to Bedrock KB + S3 Vectors. See `plans/image-7-still-no-snazzy-fairy.md`.
+- **Phase F:** single retrieval surface. LibraryFeedback DynamoDB table deleted; SME-approved Q&A moved to the KB under `sme-approved/` prefix. Staleness daemon deleted. H signal became real cosine similarity against the KB's `sme_approved_answer` slice.
+- **Phase G:** class-based dispatch. The per-topic dispatch table collapsed into four classes (`auth_compliance`, `auth_product`, `gated`, `unclassified`). Tier logic became class-aware: auth_* go GREEN axiomatically when primary retrieves (no SME decay risk); unclassified caps at AMBER; gated honors force_tier. Event-driven auto-ingestion (S3 → EventBridge → ingestion_trigger Lambda) replaces query-time freshness suppression. Weekly + yearly safety-net re-ingestion schedules added. First full-pipeline run produced 5G / 6A / 1R on `demo_rfp_techops.xlsx` — the healthy mix the refactor was motivated by.
 
-The non-negotiable logic (confidence scorer formulas, hard rules, Excel I/O, Guardrails) was not touched in either refactor.
+Hard rules (compliance_claim, sla_claim, pricing_never_autogenerated, etc.) still apply uniformly across classes and can demote any tier. Confidence scorer formulas, Excel I/O, and Guardrails remain untouched from pre-refactor.
 
 | Component | State | Notes |
 |---|---|---|
@@ -116,11 +127,13 @@ The non-negotiable logic (confidence scorer formulas, hard rules, Excel I/O, Gua
 | `infra/lib/orchestration-stack.ts` | ✓ deployed | Plain `Map` (concurrency 10); retriever has `KNOWLEDGE_BASE_ID` env + `bedrock:Retrieve` grant; retriever timeout 90s |
 | `infra/lib/observability-stack.ts` | ✓ deployed | CloudWatch metrics + dashboard |
 | `infra/lib/static-site-stack.ts` | ✓ deployed | CloudFront + ACM on `rfp-copilot.meringue-app.com` |
-| `lambdas/retriever/handler.py` | ✓ refactored (Phases E+F) | `_knowledge_base_retrieve` replaces the old S3 keyword scan; `_kb_prior_matches` replaces the old DDB scan for the H signal; envelope preserved so freshness suppression still fires uniformly |
-| `lambdas/review_api/handler.py` | ✓ refactored (Phase F) | On approve, writes Q&A markdown + sidecar to `sme-approved/` in the reference corpus bucket and triggers `bedrock-agent:StartIngestionJob` (fire-and-forget). Old DDB PutItem path gone. |
+| `lambdas/retriever/handler.py` | ✓ refactored (Phases E→G) | `_knowledge_base_retrieve` replaces the old S3 keyword scan; `_kb_prior_matches` replaces the DDB scan for H signal and is only called for `unclassified` topics; `_apply_freshness_suppression` is deleted (Phase G). |
+| `lambdas/review_api/handler.py` | ✓ refactored (Phases F→G) | On approve, writes Q&A markdown + sidecar to `sme-approved/`. S3 PutObject event triggers ingestion automatically via `ingestion_trigger` Lambda — no direct StartIngestionJob call. |
+| `lambdas/ingestion_trigger` | ✓ new (Phase G) | Fire-and-forget KB ingestion trigger. Three invocation sources: S3 PutObject events (via EventBridge) under corpus prefixes, weekly scheduled rule, yearly scheduled rule. Idempotent — handles ConflictException on concurrent jobs. |
 | `lambdas/mock_sources` (Seismic + Gong) | ✓ deployed | Single Lambda, 5% error rate + tail latency |
-| `lambdas/staleness_daemon` | **removed (Phase F)** | Query-time freshness suppression in the retriever covers what the daemon used to do asynchronously. |
-| `lambdas/classifier/dispatch.py` | ✓ deployed | `DISPATCH_TABLE` with `source_type`-aware routing |
+| `lambdas/staleness_daemon` | **removed (Phase F)** | Event-driven auto-ingestion (Phase G) supersedes query-time freshness checks. |
+| `lambdas/question_classifier/dispatch.py` | ✓ refactored (Phase G) | 20 per-topic rows collapsed into 4 class-based configs + a topic-to-class map. `get_dispatch_plan` merges topics by class priority. |
+| `lambdas/confidence_scorer/scorer.py` | ✓ refactored (Phase G) | Class-aware tier: auth_* → GREEN if any primary passage, else AMBER; unclassified → composite, capped at AMBER; gated → composite (hard_rules overrides). |
 | Composite confidence scorer | ✓ 18/18 tests | Do not modify logic |
 | Hard rules engine | ✓ tests lock behavior | Changes require General Counsel |
 | Excel parser + writer | ✓ done | Smoke test produces colored workbook |
@@ -214,7 +227,8 @@ rfp-copilot/
 │   ├── hard_rules/               (do not modify logic — policy-locked)
 │   ├── excel_writer/             (do not modify logic)
 │   ├── mock_sources/             Single Lambda for Seismic + Gong mocks
-│   └── tests/                    40 tests passing (4 suites + KB-adapter suite)
+│   ├── ingestion_trigger/        (Phase G) Fires bedrock-agent:StartIngestionJob on S3 events + schedules
+│   └── tests/                    54 tests passing (source-authority + KB-adapter + scorer)
 ├── data/
 │   ├── corpus/                   Compact JSON sidecars (source of truth for all 4 prefixes)
 │   │   ├── compliance/           SOC 2 / ISO 27001 / FedRAMP primary source metadata

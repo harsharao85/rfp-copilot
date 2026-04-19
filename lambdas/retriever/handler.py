@@ -1,20 +1,27 @@
-"""Retrieval orchestrator — source-authority aware.
+"""Retrieval orchestrator — class-based source authority (Phase G).
 
-Consumes the dispatch_plan from the classifier to route retrievals to the
-correct sources. Applies two corroboration rules before returning:
+The classifier hands us a DispatchPlan with a topic_class. We branch:
 
-  Rule 1 — Freshness suppression: if a primary source's updated_at is newer
-    than a prior RFP's approved_at, the prior is suppressed and never reaches
-    the generator. This is the anti-decay mechanism (architecture §5.2).
+  auth_compliance / auth_product
+    Retrieve from primary + secondary (phrasing) + tertiary sources. Skip
+    sme_approved_answer — no SME-driven H signal on topics where an
+    authoritative primary exists. Tier is decided by the scorer: GREEN if
+    any primary passage retrieves, AMBER if it doesn't.
 
-  Rule 2 — Primary required: if corroboration_required=True and no primary
-    source returned passages, set corroboration_metadata.primary_missing=True.
-    The hard-rules engine caps the tier at max_tier_without_primary.
+  unclassified
+    Retrieve from primary + secondary + tertiary AND query sme_approved_answer
+    for H signal. Full composite scored. Tier capped at AMBER regardless.
 
-Rules 3 and 4 live in the hard-rules engine:
-  Rule 3 — force_tier is forwarded via corroboration_metadata.
-  Rule 4 — customer-name gating is checked against reference_customers_matched
-    by apply_rules() in the hard-rules engine.
+  gated
+    pricing → force_tier RED, skip retrieval. customer_reference → primary
+    comes from the CustomerRefs DynamoDB gate (handled in hard-rules).
+
+Freshness suppression no longer runs at query time. Source currency is
+enforced upstream — S3 PutObject events trigger KB re-ingestion, plus a
+weekly scheduled re-ingestion catches pipeline stalls.
+
+Customer-reference gating (hard rule 4) reads reference_customers_matched
+from this envelope. Force-tier (pricing) is forwarded via corroboration_metadata.
 """
 from __future__ import annotations
 
@@ -119,16 +126,15 @@ def _extract_topics(text: str) -> list[str]:
 
 def _knowledge_base_retrieve(
     text: str,
-    source: str,           # dispatch source name: compliance_store | product_docs | prior_rfps
+    source: str,           # dispatch source name: compliance_store | product_docs | prior_rfps | sme_approved_answers
     source_system: str,    # RetrievedPassage.source_system literal
     top_k: int = 5,
 ) -> list[RetrievedPassage]:
     """Call bedrock-agent-runtime:Retrieve with a source_type filter.
 
     The metadata sidecars emitted by scripts/generate_corpus_documents.py
-    carry updated_at on primaries and approved_at on priors — both are
-    propagated into RetrievedPassage.metadata so _apply_freshness_suppression
-    can compare them downstream.
+    carry updated_at on primaries and approved_at / expires_on on
+    sme_approved_answers. Metadata flows through into RetrievedPassage.metadata.
     """
     kb_id = os.environ["KNOWLEDGE_BASE_ID"]
     source_type = _SOURCE_TYPE_FILTER[source]
@@ -253,50 +259,7 @@ def _retrieve_for_sources(
 
 
 # ---------------------------------------------------------------------------
-# Corroboration Rule 1 — Freshness suppression (pure function, directly testable)
-# ---------------------------------------------------------------------------
-
-def _apply_freshness_suppression(
-    primary_passages: list[RetrievedPassage],
-    prior_passages: list[RetrievedPassage],
-) -> tuple[list[RetrievedPassage], list[str]]:
-    """Return (unsuppressed_priors, suppressed_document_ids).
-
-    A prior passage is suppressed when its approved_at is older than the most
-    recently updated primary source. Both timestamps are ISO date strings
-    (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ — lexicographic comparison is correct
-    for ISO-8601 dates).
-
-    If no primary passages have an updated_at, suppression does not apply —
-    we never suppress on missing data.
-    """
-    if not primary_passages:
-        return prior_passages, []
-
-    primary_updated_ats = [
-        p.metadata.get("updated_at", "")
-        for p in primary_passages
-        if p.metadata.get("updated_at")
-    ]
-    if not primary_updated_ats:
-        return prior_passages, []
-
-    primary_freshest = max(primary_updated_ats)
-
-    kept: list[RetrievedPassage] = []
-    suppressed: list[str] = []
-    for p in prior_passages:
-        approved_at = p.metadata.get("approved_at", "")
-        if approved_at and approved_at < primary_freshest:
-            suppressed.append(p.document_id)
-        else:
-            kept.append(p)
-
-    return kept, suppressed
-
-
-# ---------------------------------------------------------------------------
-# DynamoDB helpers
+# H-signal retrieval — SME-approved Q&A; skipped for auth_* classes.
 # ---------------------------------------------------------------------------
 
 def _kb_prior_matches(text: str, top_k: int = 3) -> list[PriorAnswerMatch]:
@@ -372,7 +335,8 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     use_stub = os.environ.get("USE_RETRIEVAL_STUB", "false").lower() == "true"
     if use_stub:
         log.warning("retriever.using_stub")
-        return Retrieval(passages=[], prior_matches=[], reference_customers_matched=[]).model_dump(mode="json")
+        return Retrieval(passages=[], prior_matches=[], reference_customers_matched=[],
+                         topic_class="unclassified").model_dump(mode="json")
 
     # Parse dispatch plan from classifier output, or fall back to topic extraction.
     classification = event.get("classification", {})
@@ -386,67 +350,51 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         from dispatch import get_dispatch_plan  # noqa: PLC0415 — local import avoids circular on stub path
         dispatch_plan = get_dispatch_plan(topics)
 
-    # Rule 3 forwarding: if dispatch forces a tier, skip retrieval entirely.
-    # The hard-rules engine reads corroboration_metadata.force_tier and enforces RED.
+    topic_class = dispatch_plan.topic_class
+
+    # Gated class with force_tier (pricing) — skip retrieval entirely.
     if dispatch_plan.force_tier:
         log.info("retriever.force_tier_skip", force_tier=dispatch_plan.force_tier.value)
         return Retrieval(
             passages=[],
             prior_matches=[],
             reference_customers_matched=[],
+            topic_class=topic_class,
             corroboration_metadata={
                 "force_tier": dispatch_plan.force_tier.value,
                 "reason": dispatch_plan.reason or "dispatch_force_tier",
             },
         ).model_dump(mode="json")
 
-    # Retrieve primary sources (factual authority).
+    # Retrieve primary, secondary (phrasing), tertiary (context) passages.
+    # Secondary + tertiary flow directly into the generator without filtering
+    # — freshness suppression is enforced upstream via event-driven KB ingestion.
     primary_passages, primary_degraded = _retrieve_for_sources(dispatch_plan.primary, text)
-
-    # Retrieve secondary sources (prior RFPs — phrasing reference only).
-    raw_prior_passages, secondary_degraded = _retrieve_for_sources(dispatch_plan.secondary, text)
-
-    # Rule 1: Freshness suppression — suppress priors older than the primary's updated_at.
-    prior_passages, suppressed_ids = _apply_freshness_suppression(primary_passages, raw_prior_passages)
-
-    # Tertiary: contextual enrichment (seismic/gong).
+    prior_passages, secondary_degraded = _retrieve_for_sources(dispatch_plan.secondary, text)
     tertiary_passages, tertiary_degraded = _retrieve_for_sources(dispatch_plan.tertiary, text)
 
     all_passages = primary_passages + prior_passages + tertiary_passages
     all_degraded = primary_degraded + secondary_degraded + tertiary_degraded
 
-    # Rule 2: Primary required check.
     corroboration_metadata: dict[str, Any] = {}
-    if suppressed_ids:
-        corroboration_metadata["suppressed_priors"] = suppressed_ids
     if all_degraded:
         corroboration_metadata["source_degraded"] = all_degraded
-    if dispatch_plan.corroboration_required and not primary_passages:
-        corroboration_metadata["primary_missing"] = True
-        corroboration_metadata["max_tier"] = dispatch_plan.max_tier_without_primary.value
-        log.warning("retriever.primary_missing", topics=topics)
 
-    # Persist suppressed_prior_count so the review UI can show the staleness badge.
-    # Only write when suppressions occurred — zero is the implicit default.
-    if suppressed_ids:
-        try:
-            _ddb().Table(os.environ["QUESTIONS_TABLE"]).update_item(
-                Key={"jobId": job_id, "questionId": question_id},
-                UpdateExpression="SET suppressed_prior_count = :spc",
-                ExpressionAttributeValues={":spc": len(suppressed_ids)},
-            )
-        except Exception as exc:
-            log.warning("retriever.suppressed_count_write_error", error=str(exc))
+    # H signal: skip for authoritative topics (no SME-override decay risk on
+    # primary-backed classes). Only query for unclassified.
+    if topic_class == "unclassified":
+        prior_matches = _kb_prior_matches(text)
+    else:
+        prior_matches = []
 
-    prior_matches = _kb_prior_matches(text)
     refs = _dynamo_reference_customers(industry)
 
     log.info(
         "retriever.done",
+        topic_class=topic_class,
         passage_count=len(all_passages),
         primary_count=len(primary_passages),
         prior_count=len(prior_passages),
-        suppressed_count=len(suppressed_ids),
         degraded_sources=all_degraded,
         prior_match_count=len(prior_matches),
         refs_count=len(refs),
@@ -457,5 +405,6 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         passages=all_passages,
         prior_matches=prior_matches,
         reference_customers_matched=refs,
+        topic_class=topic_class,
         corroboration_metadata=corroboration_metadata,
     ).model_dump(mode="json")

@@ -1,24 +1,37 @@
-"""Composite confidence scoring — per v0.4 plan §5.7.
+"""Composite confidence scoring + class-aware tier decision (Phase G).
 
-We do not trust LLM self-reported confidence. Empirically, modern
-LLMs are overconfident on wrong answers — the "confident hallucination"
-failure mode. The composite below is grounded in measurable signals
-that are tunable against labeled data.
+We do not trust LLM self-reported confidence. The composite below is
+grounded in measurable signals (H, R, C, F, G) and remains the audit
+record of how strong each signal was for every question.
 
-Weights:
-  H (0.45) — Prior-answer match similarity to nearest SME-approved
-  R (0.25) — Retrieval strength (Kendra top-K normalized)
-  C (0.15) — Source coverage (>=2 independent sources)
-  F (0.10) — Freshness decay
+Phase G changes the *tier* logic — it no longer comes purely from the
+composite. Instead:
+
+  auth_compliance, auth_product — GREEN if any primary passage retrieved,
+    AMBER if not. sme_approved_answer isn't queried for these topics
+    (no H-signal decay risk). Composite is still computed for audit.
+
+  unclassified — composite-based tier, but *capped at AMBER regardless*.
+    Human review always required when no authoritative primary anchors
+    the answer.
+
+  gated — tier is whatever composite says; hard_rules overrides to RED
+    for pricing or applies the customer-reference gate.
+
+Composite weights remain:
+  H (0.45) — Prior-answer match similarity (semantic cosine from KB)
+  R (0.25) — Retrieval strength (top-K mean of KB cosine scores)
+  C (0.15) — Source coverage (>=2 distinct source_systems in citations)
+  F (0.10) — Freshness decay of cited passages
   G (0.05) — Guardrail clean
 
-Thresholds:
-  >= 0.80 green
+Composite thresholds (used for UNCLASSIFIED only now):
+  >= 0.80 green  →  capped to AMBER for unclassified
   0.55–0.80 amber
   < 0.55 red
 
-Hard-rule overrides live in `hard_rules/` and run AFTER scoring —
-they can demote green to amber or amber to red, never the reverse.
+Hard rules run AFTER this scorer and can only demote (pricing → RED,
+compliance claim without citation → min AMBER, etc.).
 """
 from __future__ import annotations
 
@@ -34,6 +47,11 @@ from shared.models import (
 
 GREEN_THRESHOLD = 0.80
 AMBER_THRESHOLD = 0.55
+
+# Passages with these source_system values count as "primary" for the
+# auth_* class tier decision. kb_source_type → passage.source_system is
+# compliance_cert → "compliance" and product_doc → "whitepaper".
+_PRIMARY_SOURCE_SYSTEMS = {"compliance", "whitepaper"}
 
 
 def score_h(prior_matches: list[PriorAnswerMatch]) -> float:
@@ -99,12 +117,21 @@ def score_g(guardrail_flags: list[str]) -> float:
     return 0.0 if guardrail_flags else 1.0
 
 
+def _composite_tier(composite: float) -> Tier:
+    if composite >= GREEN_THRESHOLD:
+        return Tier.GREEN
+    if composite >= AMBER_THRESHOLD:
+        return Tier.AMBER
+    return Tier.RED
+
+
 def score(
     *,
     passages: list[RetrievedPassage],
     prior_matches: list[PriorAnswerMatch],
     generated: GeneratedAnswer,
     guardrail_flags: list[str] | None = None,
+    topic_class: str = "unclassified",
 ) -> tuple[float, ConfidenceBreakdown, Tier]:
     guardrail_flags = guardrail_flags or []
     breakdown = ConfidenceBreakdown(
@@ -116,17 +143,21 @@ def score(
     )
     composite = breakdown.composite()
 
-    # H=0 cap: if no comparable prior answer exists, cap at amber.
-    # This is the "never-before-answered" safeguard — even strong
-    # retrieval shouldn't yield green without SME history.
-    if breakdown.h == 0.0 and composite >= GREEN_THRESHOLD:
-        composite = GREEN_THRESHOLD - 0.01
-
-    if composite >= GREEN_THRESHOLD:
-        tier = Tier.GREEN
-    elif composite >= AMBER_THRESHOLD:
-        tier = Tier.AMBER
+    if topic_class in ("auth_compliance", "auth_product"):
+        # Primary-backed topic. GREEN if any authoritative passage retrieved,
+        # AMBER if the primary source returned nothing. Composite is still
+        # computed above for audit/telemetry but doesn't decide the tier.
+        has_primary = any(p.source_system in _PRIMARY_SOURCE_SYSTEMS for p in passages)
+        tier = Tier.GREEN if has_primary else Tier.AMBER
+    elif topic_class == "gated":
+        # hard_rules will force RED for pricing or apply the customer-reference
+        # gate. Return the composite-based tier as a placeholder.
+        tier = _composite_tier(composite)
     else:
-        tier = Tier.RED
+        # unclassified — composite-based tier, capped at AMBER. No authoritative
+        # anchor, so human review is always required before shipping.
+        tier = _composite_tier(composite)
+        if tier == Tier.GREEN:
+            tier = Tier.AMBER
 
     return composite, breakdown, tier

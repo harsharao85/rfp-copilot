@@ -35,7 +35,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         current_tier=current_tier,
     )
 
-    # Source-authority rule 3: dispatch force_tier (e.g. pricing → RED).
+    # Dispatch force_tier (e.g. pricing → RED).
     # Belt-and-suspenders: PRICING_PATTERNS in apply_rules() already catches
     # pricing language; this catches cases where the generator produces a
     # clean deflection ("pricing not available") that contains no pricing terms.
@@ -45,12 +45,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         if trigger not in result.triggers:
             result.triggers.append(trigger)
 
-    # Source-authority rule 2: primary source required but not found.
-    # Cap tier at AMBER — the answer lacks the authoritative source it needs.
-    if corroboration_meta.get("primary_missing") and result.final_tier == Tier.GREEN:
-        result.final_tier = Tier.AMBER
-        result.triggers.append("unauthorized_without_primary")
-        result.reviewer_required = True
+    # Note: the old `primary_missing` cap is removed — the scorer now makes
+    # that call directly based on topic_class (auth_* with no primary → AMBER
+    # from the scorer, before hard_rules runs).
 
     log.info(
         "hard_rules.applied",
@@ -72,6 +69,23 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         for p in event.get("retrieval", {}).get("passages", [])
         if p.get("source_system") in primary_systems and p.get("uri")
     ]
+
+    # Displayed confidence aligns with the displayed tier. For unclassified
+    # topics the composite *is* the decision driver, so show it verbatim. For
+    # auth_* and gated topics the tier is class-driven — composite is audit-
+    # only — so show a representative confidence per tier instead of the raw
+    # composite (which would confusingly look low next to a GREEN tier).
+    retrieval_topic_class = event.get("retrieval", {}).get("topic_class", "unclassified")
+    composite = float(event["score"].get("composite", 0))
+    if retrieval_topic_class == "unclassified":
+        displayed_confidence = composite
+    else:
+        displayed_confidence = {
+            Tier.GREEN: 0.95,
+            Tier.AMBER: 0.65,
+            Tier.RED:   0.20,
+        }[result.final_tier]
+
     ddb.Table(os.environ["QUESTIONS_TABLE"]).update_item(
         Key={"jobId": job_id, "questionId": question_id},
         UpdateExpression=(
@@ -84,7 +98,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         ExpressionAttributeValues={
             ":at": answer_text,
             ":ci": event["generation"].get("citations", []),
-            ":rc": Decimal(str(event["score"]["composite"])),
+            ":rc": Decimal(str(displayed_confidence)),
             ":ti": result.final_tier.value,
             ":cb": {k: Decimal(str(v)) for k, v in breakdown.items() if isinstance(v, (int, float))},
             ":hr": result.triggers,

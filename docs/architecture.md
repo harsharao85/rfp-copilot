@@ -2,7 +2,7 @@
 
 **Owner:** H
 **Status:** Deployed + demo-ready
-**Last updated:** 2026-04-19 (post Phase F — single KB retrieval surface)
+**Last updated:** 2026-04-19 (post Phase G — class-based dispatch + auto-ingestion)
 **Audience:** AWS freshers. You know the cloud exists and have maybe spun up an EC2 instance, but "Step Functions" and "Bedrock Guardrails" are new words. This doc walks you through the system the way I'd walk a new hire through it on day one.
 
 ---
@@ -251,6 +251,17 @@ Not the person reading this doc, but the person they report to. Keep this handy 
 
 Here's the single most important design decision in the whole project. If you take one thing away from this doc, take this.
 
+**Phase G (2026-04-19) — the topic taxonomy collapsed into four classes.** Rather than a per-topic dispatch table with twenty rows and half a dozen policy fields per row, there are now four classes, and each topic is assigned to exactly one of them:
+
+| Class | Member topics | Primary source(s) | Queries `sme_approved_answer`? | Tier logic |
+|---|---|---|---|---|
+| `auth_compliance` | soc2, iso27001, fedramp, gdpr, dpa, incident_response, pentest | `compliance_store` (compliance PDFs) | No | GREEN if primary retrieves ≥1 passage, else AMBER. Hard rules demote. |
+| `auth_product` | encryption_*, key_management, sso, mfa, scim, dr_bcp, ssdlc, sbom, data_residency | `product_docs` (+ compliance for dr_bcp / residency) | No | Same as auth_compliance. |
+| `gated` | pricing, customer_reference | `deal_desk` (n/a) / `customer_refs_db` | No | pricing → RED forced; customer_reference → hard rule 4. |
+| `unclassified` | long-tail that misses all topic patterns | `product_docs` (default) | **Yes** — this is where the flywheel runs | Full composite, tier capped at AMBER regardless — human review always required. |
+
+Tier logic is class-aware, not purely composite. An `auth_product` SOC 2 / encryption / SSO question goes green *because the authoritative document answers it*, not because enough signals aggregate above 0.80. Conversely, a long-tail question never goes green automatically — with no primary anchor, human review is the baseline.
+
 **The problem every RFP tool on the market has.** Loopio, Responsive, Arphie — they all work the same way. Salespeople answer questions, SMEs approve the answers, and answers go into a library. Next time a similar question comes up, pull the previous answer and auto-fill.
 
 The failure mode: an answer that was accurate in January 2023 is still in the library in October 2025. The product has changed. The SOC 2 report is a new one. The team that approved it has left. But the library confidently quotes the old answer, and because it has an "SME approved" checkmark next to it, nobody questions it.
@@ -353,7 +364,7 @@ flowchart LR
 ```
 
 Reading the signals:
-- **H (0.45)** — how closely does an SME-approved prior answer match this question, measured as cosine similarity between the incoming question's embedding and the best-matching entry in the `sme_approved_answer` slice of the KB. This is the biggest lever because an SME has literally signed off on similar content before. (Phase F note: before Phase F this was a fake 0.82 whenever any topic tag overlapped — it's a real semantic score now, 0.4–0.95 in practice.)
+- **H (0.45)** — how closely does an SME-approved prior answer match this question, measured as cosine similarity between the incoming question's embedding and the best-matching entry in the `sme_approved_answer` slice of the KB. Phase G: H is only queried for `unclassified` topics. For `auth_compliance` and `auth_product` classes, the H signal is intentionally skipped — the authoritative primary source is the anchor and SME-approved phrasing cannot propagate misinformation into future answers. (Phase F note: before Phase F this was a fake 0.82 whenever any topic tag overlapped — it's a real semantic score now where it runs.)
 - **R (0.25)** — how strong is the retrieval? If the classifier said "soc2" and the retriever returned five SOC-2-related passages, R is high. If it returned zero, R is low.
 - **C (0.15)** — coverage across sources. An answer citing three different sources is more trustworthy than one citing one.
 - **F (0.10)** — freshness. How recently was the retrieved evidence updated?
@@ -423,13 +434,21 @@ flowchart TB
     style Stale fill:#ffe4b5,stroke:#8b4513
 ```
 
-Two things happen every time an SME approves an amber/red answer (Phase F — the flywheel now runs entirely through the Bedrock KB; LibraryFeedback DynamoDB is gone):
+The flywheel has two phases after Phase G.
 
-1. **The approved Q&A is written to S3 as markdown + Bedrock metadata sidecar** (`sme-approved/<id>.md` + `<id>.md.metadata.json`, with `source_type=sme_approved_answer`, `approved_by`, `approved_at`, `expires_on`, `corroborated_by`). The Review API Lambda then calls `bedrock-agent:StartIngestionJob` to fold the new entry into the KB. The approval becomes semantically retrievable in ~1–3 minutes (the ingestion cycle). Next time a similar question comes up, the H signal (now a *real cosine similarity* from the KB, not a fake 0.82 or topic-tag overlap) lights up for it, pushing the next answer closer to green. *This* is the flywheel — more approvals → more greens → less SME work.
+**Phase F + G — SME approval flow (now fully event-driven):**
 
-2. **Freshness suppression runs at query time, uniformly across prior-RFPs and SME-approved entries.** The retriever's `_apply_freshness_suppression` compares each approved answer's `approved_at` against the `updated_at` of every Primary source it corroborated. If a newer Primary exists, the approved answer is suppressed from the H signal for that query. No out-of-band staleness daemon; no deferred flag propagation. One retrieval surface, one freshness rule.
+1. **The approved Q&A is written to S3 as markdown + Bedrock metadata sidecar** at `sme-approved/<id>.md` by the Review API Lambda. The sidecar carries `source_type=sme_approved_answer`, `approved_by`, `approved_at`, `expires_on`, `question_text`.
+2. **The PutObject event fires the `ingestion_trigger` Lambda via EventBridge** (no direct bucket-to-Lambda notification — avoids the cross-stack cycle that direct notifications would create between storage and orchestration stacks). The Lambda calls `bedrock-agent:StartIngestionJob` and returns. If a job is already running, it catches `ConflictException` and logs — the next upload picks up the combined delta.
+3. The approval becomes semantically retrievable in ~1–3 minutes (the ingestion cycle).
 
-**This is what "library self-cleaning" means.** Approvals have a shelf life tied to the documents that justified them. The library can't silently rot into "SOC 2 answers from two generations ago" because the anti-decay mechanism is built into every retrieval.
+**Phase G — the key scoping rule:** SME-approved answers only feed the H signal for **`unclassified` topics** (long-tail questions where no primary source exists). For `auth_compliance` and `auth_product` topics, SME-approved answers are never queried. This is deliberate anti-propagation: a stale SME approval on a SOC 2 question from 18 months ago cannot leak into today's SOC 2 answer because the system goes directly to the current `compliance_cert` source. Misinformation can't compound.
+
+**Two belt-and-suspenders safety nets** ensure source currency without a staleness daemon:
+- A **weekly EventBridge rule** fires the same `ingestion_trigger` Lambda. KB ingestion is delta-based, so this is a near-zero-cost no-op on an unchanged corpus; it catches silent S3-event pipeline stalls within 7 days.
+- A **yearly EventBridge rule** runs a 12-monthly dormancy guard for the same reason at a longer cadence.
+
+The old `_apply_freshness_suppression` function and the out-of-band `staleness_daemon` Lambda are both deleted. Source currency is a property of ingestion operations now, not a query-time inter-passage comparison.
 
 ---
 

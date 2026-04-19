@@ -1,10 +1,11 @@
 """Tests for _knowledge_base_retrieve — the Bedrock KB adapter.
 
-Four assertions per the Phase C plan:
- 1. `retrieve` is called with the correct source_type filter for each of the
-    three dispatch source names (compliance_store, product_docs, prior_rfps).
+Assertions:
+ 1. `retrieve` is called with the correct source_type filter for each
+    dispatch source name (compliance_store, product_docs, prior_rfps,
+    sme_approved_answers).
  2. updated_at / approved_at in the KB result's metadata are propagated into
-    RetrievedPassage.metadata so _apply_freshness_suppression still fires.
+    RetrievedPassage.metadata.
  3. Empty retrievalResults returns [] (not raises).
  4. A ClientError returns [] and logs retriever.kb_error.
 """
@@ -17,7 +18,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from retriever import handler
-from retriever.handler import _apply_freshness_suppression, _knowledge_base_retrieve
+from retriever.handler import _knowledge_base_retrieve
 
 
 @pytest.fixture(autouse=True)
@@ -91,8 +92,7 @@ def test_retrieve_sends_correct_source_type_filter(
 
 
 # ---------------------------------------------------------------------------
-# Assertion 2 — updated_at / approved_at pass through into metadata so
-#               _apply_freshness_suppression still fires end-to-end.
+# Assertion 2 — updated_at / approved_at pass through into metadata.
 # ---------------------------------------------------------------------------
 
 def test_updated_at_flows_through_to_passage_metadata(mock_client: MagicMock) -> None:
@@ -113,35 +113,23 @@ def test_updated_at_flows_through_to_passage_metadata(mock_client: MagicMock) ->
     assert passages[0].uri == "s3://bucket/compliance/soc2_cert_2025.pdf"
 
 
-def test_approved_at_flows_through_and_freshness_suppression_fires(mock_client: MagicMock) -> None:
-    """End-to-end: KB returns primary + prior; suppression picks up both dates from metadata."""
-    # First call: primary source
-    # Second call: prior source
-    mock_client.retrieve.side_effect = [
-        _kb_response([
-            _kb_hit(
-                text="Current SOC 2 cert.",
-                uri="s3://bucket/compliance/soc2_cert_2025.pdf",
-                document_id="soc2_cert_2025",
-                updated_at="2025-10-01",
-            ),
-        ]),
-        _kb_response([
-            _kb_hit(
-                text="Older approved answer.",
-                uri="s3://bucket/prior-rfps/acme_financial_soc2_answer.md",
-                document_id="acme_financial_soc2_answer",
-                approved_at="2025-07-01",
-            ),
-        ]),
-    ]
+def test_approved_at_flows_through_to_passage_metadata(mock_client: MagicMock) -> None:
+    mock_client.retrieve.return_value = _kb_response([
+        _kb_hit(
+            text="Older approved answer.",
+            uri="s3://bucket/sme-approved/lfb-0001.md",
+            document_id="lfb-0001",
+            approved_at="2025-07-01",
+        ),
+    ])
 
-    primary = _knowledge_base_retrieve("SOC 2", source="compliance_store", source_system="compliance")
-    prior   = _knowledge_base_retrieve("SOC 2", source="prior_rfps",       source_system="historical_rfp")
+    passages = _knowledge_base_retrieve(
+        "SOC 2", source="sme_approved_answers", source_system="sme_approved",
+    )
 
-    kept, suppressed = _apply_freshness_suppression(primary, prior)
-    assert kept == []
-    assert "acme_financial_soc2_answer" in suppressed
+    assert len(passages) == 1
+    assert passages[0].metadata["approved_at"] == "2025-07-01"
+    assert passages[0].document_id == "lfb-0001"
 
 
 # ---------------------------------------------------------------------------

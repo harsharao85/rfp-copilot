@@ -10,6 +10,8 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as python from '@aws-cdk/aws-lambda-python-alpha';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -183,6 +185,8 @@ export class OrchestrationStack extends cdk.Stack {
     const reviewApiFn = makeLambda('ReviewApiFn', 'review_api', 30);
     // Mock sources (Seismic + Gong) behind a single Lambda
     const mockSourcesFn = makeLambda('MockSourcesFn', 'mock_sources');
+    // Ingestion trigger — tiny Lambda fired by S3 events + EventBridge schedules.
+    const ingestionTriggerFn = makeLambda('IngestionTriggerFn', 'ingestion_trigger');
     // Task 1: upload API — presign, start, status, download
     const uploadApiFn = makeLambda('UploadApiFn', 'upload_api');
 
@@ -337,15 +341,61 @@ export class OrchestrationStack extends cdk.Stack {
       resources: ['*'],
     }));
     // Flywheel: review_api writes SME-approved Q&A into the reference corpus
-    // bucket's sme-approved/ prefix and triggers a KB ingestion job. Needs
-    // S3 PutObject, KMS encrypt (the bucket is CMK-encrypted), and the
-    // bedrock-agent ingestion action.
+    // bucket's sme-approved/ prefix. The S3 PutObject event fires the
+    // ingestion_trigger Lambda, so review_api doesn't need to call
+    // StartIngestionJob directly. Just S3 write + KMS encrypt grants.
     props.referenceCorpusBucket.grantWrite(reviewApiFn);
     props.referenceKey.grantEncryptDecrypt(reviewApiFn);
-    reviewApiFn.addToRolePolicy(new iam.PolicyStatement({
+
+    // Ingestion trigger: needs bedrock-agent:StartIngestionJob on the KB.
+    ingestionTriggerFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['bedrock:StartIngestionJob'],
       resources: [props.knowledgeBaseArn],
     }));
+
+    // S3 PutObject events → ingestion trigger, routed through EventBridge.
+    // storage-stack enables eventBridgeEnabled on the bucket; this rule
+    // subscribes. Using EventBridge (not direct S3 → Lambda notification)
+    // avoids the cross-stack dependency cycle that notification.LambdaDestination
+    // would create, since the bucket lives in storage-stack and the Lambda
+    // lives here in orchestration.
+    new events.Rule(this, 'CorpusUploadRule', {
+      description: 'Fire ingestion_trigger on PutObject under corpus prefixes',
+      eventPattern: {
+        source: ['aws.s3'],
+        detailType: ['Object Created'],
+        detail: {
+          bucket: { name: [props.referenceCorpusBucket.bucketName] },
+          object: {
+            key: [
+              { prefix: 'compliance/' },
+              { prefix: 'product-docs/' },
+              { prefix: 'prior-rfps/' },
+              { prefix: 'sme-approved/' },
+            ],
+          },
+        },
+      },
+      targets: [new targets.LambdaFunction(ingestionTriggerFn)],
+    });
+
+    // Weekly re-ingestion — safety net for a silently stalled S3-event
+    // pipeline. KB ingestion is delta-based so this is a no-op on an
+    // unchanged corpus.
+    new events.Rule(this, 'WeeklyKbReingest', {
+      schedule: events.Schedule.rate(cdk.Duration.days(7)),
+      description: 'Weekly Bedrock KB re-ingestion (safety net)',
+      targets: [new targets.LambdaFunction(ingestionTriggerFn)],
+    });
+
+    // Yearly re-ingestion — 12-month health cadence. Independent from the
+    // weekly schedule so even if both the S3 events AND the weekly rule
+    // stopped firing, the KB would still get refreshed at least once per year.
+    new events.Rule(this, 'YearlyKbReingest', {
+      schedule: events.Schedule.rate(cdk.Duration.days(365)),
+      description: 'Annual Bedrock KB re-ingestion (12-month dormancy guard)',
+      targets: [new targets.LambdaFunction(ingestionTriggerFn)],
+    });
 
     // HTTP API for the review UI
     const httpApi = new apigatewayv2.HttpApi(this, 'ReviewHttpApi', {

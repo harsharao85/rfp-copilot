@@ -106,9 +106,7 @@
   <!-- Nav bar -->
   <div class="config-bar">
     <button class="btn" id="back-btn" onclick="showList()">← Back</button>
-    <button class="btn" id="staleness-btn" onclick="triggerStaleness()" title="Trigger staleness sweep (demo)">⟳ Staleness</button>
   </div>
-  <div id="staleness-result"></div>
 
   <div id="main"></div>
 </div>
@@ -264,23 +262,6 @@ async function doReject(jobId) {
     document.querySelectorAll('.btn-success,.btn-danger').forEach(b=>b.disabled=true);
   } catch(e) {
     $(`status-${jobId}`).innerHTML = `<div class="status-msg status-err">Error: ${e.message}</div>`;
-  }
-}
-
-async function triggerStaleness() {
-  const btn = $('staleness-btn');
-  const out = $('staleness-result');
-  btn.disabled = true;
-  out.innerHTML = '';
-  try {
-    const data = await api('/admin/staleness/trigger', 'POST');
-    out.innerHTML = `<div class="status-msg status-ok" style="margin-top:8px">
-      Staleness sweep: checked ${data.checked}, flagged ${data.stale_flagged}, cleared ${data.stale_cleared}
-    </div>`;
-  } catch(e) {
-    out.innerHTML = `<div class="status-msg status-err" style="margin-top:8px">Staleness error: ${e.message}</div>`;
-  } finally {
-    btn.disabled = false;
   }
 }
 

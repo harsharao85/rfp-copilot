@@ -38,7 +38,32 @@ def _recent(days: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
 
-def test_strong_signals_produce_green() -> None:
+def test_auth_product_with_primary_passage_is_green() -> None:
+    """Phase G: auth_* classes are GREEN when any primary passage retrieves."""
+    passages = [
+        RetrievedPassage(
+            source_system="historical_rfp", document_id="doc-1",
+            excerpt="...", score=0.95, uri="s3://x",
+            metadata={"updated_at": _recent(30)},
+        ),
+        RetrievedPassage(
+            source_system="whitepaper", document_id="doc-2",  # primary
+            excerpt="...", score=0.88, uri="s3://y",
+            metadata={"updated_at": _recent(45)},
+        ),
+    ]
+    composite, breakdown, tier = score(
+        passages=passages, prior_matches=[], generated=_make_answer(),
+        topic_class="auth_product",
+    )
+    assert tier == Tier.GREEN
+    # Composite still computed for audit even when tier doesn't use it.
+    assert breakdown.h == 0.0  # No SME H-signal on auth_* topics
+
+
+def test_unclassified_strong_composite_still_caps_at_amber() -> None:
+    """Phase G: unclassified never goes green regardless of composite — human
+    review is required because no authoritative primary anchors the answer."""
     passages = [
         RetrievedPassage(
             source_system="historical_rfp", document_id="doc-1",
@@ -59,33 +84,11 @@ def test_strong_signals_produce_green() -> None:
     )]
     composite, breakdown, tier = score(
         passages=passages, prior_matches=prior, generated=_make_answer(),
+        topic_class="unclassified",
     )
-    assert tier == Tier.GREEN
-    assert composite >= 0.80
+    assert composite >= 0.80      # would be green by composite
+    assert tier == Tier.AMBER     # but capped
     assert breakdown.h == 0.92
-
-
-def test_no_prior_caps_at_amber() -> None:
-    """H=0 safeguard: even with strong retrieval, no prior SME-approved
-    answer means we cannot ship green."""
-    passages = [
-        RetrievedPassage(
-            source_system="historical_rfp", document_id="doc-1",
-            excerpt="...", score=0.95, uri="s3://x",
-            metadata={"updated_at": _recent(30)},
-        ),
-        RetrievedPassage(
-            source_system="whitepaper", document_id="doc-2",
-            excerpt="...", score=0.95, uri="s3://y",
-            metadata={"updated_at": _recent(30)},
-        ),
-    ]
-    composite, breakdown, tier = score(
-        passages=passages, prior_matches=[], generated=_make_answer(),
-    )
-    assert breakdown.h == 0.0
-    assert tier != Tier.GREEN
-    assert composite < 0.80
 
 
 def test_no_evidence_is_red() -> None:

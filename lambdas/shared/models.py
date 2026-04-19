@@ -53,16 +53,23 @@ class RetrievedPassage(BaseModel):
 class DispatchPlan(BaseModel):
     """Source authority routing plan for a classified topic.
 
-    primary:   authoritative sources (factual truth) — freshness-suppression
-               applies when priors are older than primary updated_at.
+    topic_class drives tier logic downstream (Phase G):
+      auth_compliance — compliance_store is primary; GREEN if primary retrieves,
+                        AMBER if it doesn't. sme_approved_answer NOT queried
+                        (no SME-override decay risk on authoritative topics).
+      auth_product    — product_docs is primary; same tier logic as above.
+      gated           — pricing → RED forced; customer_reference → hard rule 4.
+      unclassified    — composite-scored, tier capped at AMBER regardless of
+                        composite (human review always required).
+
+    primary:   authoritative sources (factual truth).
     secondary: phrasing reference only (prior RFPs). Never factual authority.
     tertiary:  contextual enrichment (Seismic, Gong) — optional, circuit-broken.
     """
+    topic_class: str = "unclassified"
     primary: list[str] = Field(default_factory=list)
     secondary: list[str] = Field(default_factory=list)
     tertiary: list[str] = Field(default_factory=list)
-    corroboration_required: bool = False
-    max_tier_without_primary: Tier = Tier.AMBER
     force_tier: Tier | None = None
     reason: str | None = None
 
@@ -84,10 +91,11 @@ class Retrieval(BaseModel):
     reference_customers_matched: list[str] = Field(default_factory=list)
     """Customer names confirmed public_reference=true + unexpired approval in CustomerRefs.
     An answer invoking a customer NOT in this list must be forced amber (hard-rule #4)."""
+    topic_class: str = "unclassified"
+    """Class-based tier routing: auth_compliance | auth_product | gated | unclassified."""
     corroboration_metadata: dict[str, Any] = Field(default_factory=dict)
     """Source-authority signals forwarded to the hard-rules engine.
-    Keys: force_tier (str), reason (str), primary_missing (bool),
-          suppressed_priors (list[str] of suppressed document_ids)."""
+    Keys: force_tier (str), reason (str)."""
 
 
 class GeneratedAnswer(BaseModel):
