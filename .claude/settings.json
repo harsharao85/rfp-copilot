@@ -1,23 +1,30 @@
 {
-  "$comment": "PoC Factory gate wiring. RECONSTRUCTED 2026-08-27 — the original .claude/settings.json was lost in a skill sync.",
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)", "Bash(npx cdk synth*)", "Bash(npx cdk diff*)",
+      "Bash(checkov *)", "Bash(git *)", "Bash(gh pr *)"
+    ],
+    "deny": [
+      "Bash(npx cdk deploy*)", "Bash(cdk deploy*)", "Bash(aws configure*)",
+      "Read(./.env)", "Read(./**/*.pem)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate_guard.py\""
-          }
+          { "type": "command", "command": "python3 .claude/hooks/gate_guard.py" }
         ]
       }
-    ]
-  },
-  "permissions": {
-    "deny": [
-      "Read(./.env)",
-      "Read(./**/*.pem)",
-      "Read(./**/credentials)"
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "python3 .claude/hooks/bolt_log_reminder.py" }
+        ]
+      }
     ]
   }
 }

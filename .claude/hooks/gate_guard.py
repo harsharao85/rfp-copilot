@@ -1,119 +1,55 @@
 #!/usr/bin/env python3
-"""PreToolUse gate guard for the PoC Factory.
+"""PreToolUse hook: refuse dangerous commands unless the matching Notion Gate is Approved.
 
-Blocks `cdk deploy` (and equivalents) unless the G4 Deploy Approval row in the
-Notion Gates database carries Verdict = Approved for this engagement.
-
-Fails CLOSED. If the token is missing, Notion is unreachable, or the row cannot
-be found, the command is blocked. A deploy gate that fails open is not a gate.
-
-RECONSTRUCTED 2026-08-27 from docs/factory/gates.md and docs/factory/notion-schema.md;
-the original .claude/hooks/ was lost in a skill sync. Diff before trusting.
+Claude Code passes the tool call as JSON on stdin. Exit 2 blocks the call and returns the
+message to the agent. Exit 0 allows it. This is defence in depth on top of settings.json deny
+rules and the pipeline-only deploy path; it is not the only control.
 """
-from __future__ import annotations
+import json, os, sys, urllib.request
 
-import json
-import os
-import re
-import sys
-import urllib.error
-import urllib.request
+GUARDED = {
+    "cdk deploy": "G4 Deploy Approval",
+    "git push origin main": "G3 Code Review",
+    "gh pr merge": "G3 Code Review",
+    "terraform apply": "G4 Deploy Approval",
+}
 
-GATES_DATA_SOURCE_ID = "a81313be-ea9c-4adc-906f-52edf72461ff"
-NOTION_VERSION = "2022-06-28"
-GUARDED = re.compile(r"\bcdk\s+(deploy|destroy)\b|\bcloudformation\s+(deploy|create-stack|update-stack)\b")
-GATE = "G4 Deploy Approval"
-
-
-def load_dotenv(path: str = ".env") -> None:
-    try:
-        with open(path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                os.environ.setdefault(key.strip(), value.strip().strip("'\""))
-    except OSError:
-        pass
-
-
-def block(reason: str) -> None:
-    print(f"BLOCKED by gate_guard: {reason}", file=sys.stderr)
-    sys.exit(2)
-
-
-def query_gate(token: str, engagement_id: str) -> list[dict]:
-    body = json.dumps(
-        {
-            "filter": {
-                "and": [
-                    {"property": "Engagement ID", "rich_text": {"equals": engagement_id}},
-                    {"property": "Gate", "select": {"equals": GATE}},
-                ]
-            }
-        }
-    ).encode()
+def gate_approved(gate_name: str) -> bool:
+    token = os.environ.get("NOTION_TOKEN")
+    ds = os.environ.get("NOTION_GATES_DS")
+    eng = os.environ.get("POC_ENGAGEMENT_ID")
+    if not (token and ds and eng):
+        return False  # fail closed
+    body = json.dumps({
+        "filter": {"and": [
+            {"property": "Gate", "select": {"equals": gate_name}},
+            {"property": "Engagement ID", "rich_text": {"equals": eng}},
+            {"property": "Verdict", "select": {"equals": "Approved"}},
+        ]},
+        "page_size": 1,
+    }).encode()
     req = urllib.request.Request(
-        f"https://api.notion.com/v1/data_sources/{GATES_DATA_SOURCE_ID}/query",
-        data=body,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Notion-Version": NOTION_VERSION,
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.load(resp).get("results", [])
-
-
-def main() -> None:
+        f"https://api.notion.com/v1/data_sources/{ds}/query", data=body, method="POST",
+        headers={"Authorization": f"Bearer {token}", "Notion-Version": "2025-09-03",
+                 "Content-Type": "application/json"})
     try:
-        event = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
-        sys.exit(0)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return len(json.load(r).get("results", [])) > 0
+    except Exception:
+        return False  # fail closed
 
-    if event.get("tool_name") != "Bash":
-        sys.exit(0)
-    command = (event.get("tool_input") or {}).get("command", "")
-    if not GUARDED.search(command):
-        sys.exit(0)
-
-    load_dotenv()
-    engagement_id = os.environ.get("POC_ENGAGEMENT_ID", "").strip()
-    token = os.environ.get("NOTION_TOKEN", "").strip()
-
-    if not engagement_id:
-        block("POC_ENGAGEMENT_ID is not set in .env — cannot identify the engagement.")
-    if not token:
-        block(
-            f"NOTION_TOKEN is not set, so {GATE} for {engagement_id} cannot be verified. "
-            "Deploy runs from the pipeline after a human approves the gate."
-        )
-
-    try:
-        rows = query_gate(token, engagement_id)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
-        block(f"could not reach Notion to verify {GATE} for {engagement_id}: {exc}")
-
-    if not rows:
-        block(f"no {GATE} row found for {engagement_id}. The gate has not been requested.")
-
-    verdict = ""
-    try:
-        verdict = rows[0]["properties"]["Verdict"]["select"]["name"]
-    except (KeyError, TypeError):
-        block(f"{GATE} row for {engagement_id} has no readable Verdict.")
-
-    if verdict != "Approved":
-        block(
-            f"{GATE} for {engagement_id} is '{verdict}', not 'Approved'. "
-            "Only a human sets the verdict. Attach evidence and request review."
-        )
-
-    sys.exit(0)
-
+def main():
+    payload = json.load(sys.stdin)
+    cmd = (payload.get("tool_input") or {}).get("command", "")
+    for needle, gate in GUARDED.items():
+        if needle in cmd:
+            if gate_approved(gate):
+                return 0
+            print(f"BLOCKED: '{needle}' requires Notion gate '{gate}' = Approved for "
+                  f"{os.environ.get('POC_ENGAGEMENT_ID','<unset>')}. Ask the human reviewer.",
+                  file=sys.stderr)
+            return 2
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

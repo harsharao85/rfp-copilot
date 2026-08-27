@@ -1,7 +1,5 @@
 # Notion "PoC Factory" schema (contract for agents)
 
-Source: poc-factory-init bundle, `assets/bundle/docs/notion-schema.md`. Vendored here 2026-08-27.
-
 Root page: PoC Factory. Six databases. Every non-root record relates to exactly one Engagement.
 
 ## Engagements
@@ -12,7 +10,8 @@ Account TTL · Repo URL · Human Lead · Brief Source (files) · Created · Last
 ## Units of Work
 Unit of Work (title) · UoW ID (UOW-n) · Engagement (rel) · Phase (Inception/Construction/Operations) ·
 Size (S/M/L) · Status (Backlog/Ready/In Progress/In Review/Done/Blocked) · Test Status (Not Run/Pass/Fail) ·
-Acceptance Criteria · Architecture Notes · Implementation Notes · PR URL · Owning Agent · Bolt
+Acceptance Criteria · Dependencies (self-rel) · Architecture Notes · Implementation Notes · PR URL ·
+Owning Agent · Bolt
 
 ## Decisions (ADRs)
 Decision (title) · ADR ID (ADR-n) · Engagement (rel) · Category (Compute/Data/Auth/Integration/AI Model/Network/Other) ·
@@ -36,16 +35,15 @@ Write-scope matrix is in each agent's "Owns in Notion" section. Anything else is
 
 ## Live IDs (VeUP workspace)
 
-| Object | Data source ID |
-|---|---|
-| Engagements | fe8bd16a-9c06-490d-b76f-0427a94a4a5a |
-| Units of Work | de21c35d-e93c-42d9-a49d-ba0ec5a0bba2 |
-| Decisions | 1fffe988-b2bc-4b46-be44-a48d35177fd4 |
-| Risks & Findings | 57a51433-a145-4a4e-83a4-48e66c33390b |
-| Gates | a81313be-ea9c-4adc-906f-52edf72461ff |
-| Artifacts | 794f7507-8e2d-4c75-ac3e-2fa5f6bf7b9a |
+| Object | URL | Data source ID |
+|---|---|---|
+| PoC Factory (root) | https://app.notion.com/p/3c92be538d7781249b8fd151ac5099fd | — |
+| Engagements | https://app.notion.com/p/18b2c6807e2b4230a8f18d66954f25fb | fe8bd16a-9c06-490d-b76f-0427a94a4a5a |
+| Units of Work | https://app.notion.com/p/516ea3bc4b634d50a4a947e84adbb615 | de21c35d-e93c-42d9-a49d-ba0ec5a0bba2 |
+| Decisions | https://app.notion.com/p/70fbfc05927f4f1cbf24a57625f114a8 | 1fffe988-b2bc-4b46-be44-a48d35177fd4 |
+| Risks & Findings | https://app.notion.com/p/08959fd414e24abfb472f334a3b7068b | 57a51433-a145-4a4e-83a4-48e66c33390b |
+| Gates | https://app.notion.com/p/1455e455e2164240a1f665a391096ce3 | a81313be-ea9c-4adc-906f-52edf72461ff |
+| Artifacts | https://app.notion.com/p/f125ad2394144f12a75c717219344c99 | 794f7507-8e2d-4c75-ac3e-2fa5f6bf7b9a |
 
-Root page: https://app.notion.com/p/3c92be538d7781249b8fd151ac5099fd
-
-Note: the Gates row must carry the plain-text `Engagement ID` (e.g. `ENG-2`) in addition to the
+Note: the Gates row must carry the plain-text `Engagement ID` (e.g. `ENG-1`) in addition to the
 relation, because `gate_guard.py` filters on it without resolving relations.

@@ -47,3 +47,4 @@ secrets.json
 *.log
 logs/
 !.env.example
+_to_delete/

@@ -1,7 +1,5 @@
 # Gate contract
 
-Source: poc-factory-init bundle, `assets/bundle/docs/gates.md`. Vendored here 2026-08-27.
-
 | Gate | Opens after | Human reviews | Evidence required in Notion | Agents blocked until Approved |
 |---|---|---|---|---|
 | G1 Scope | Brief Analyst done | Brief Summary, Success Criteria, Non-Goals, UoWs, Open Questions | All "must answer before G1" questions answered | solutions-architect, security-architect, finops-analyst |
@@ -12,6 +10,3 @@ Source: poc-factory-init bundle, `assets/bundle/docs/gates.md`. Vendored here 20
 
 Rules: only a human sets `Verdict`. Agents may set `Pending` and attach evidence. A rejected gate
 returns to the owning agent with the human's comment verbatim.
-
-G4 is enforced mechanically by `.claude/hooks/gate_guard.py`, which fails closed. G1–G3 and G5 are
-enforced by the agents themselves — each agent checks its blocking gate before acting.
