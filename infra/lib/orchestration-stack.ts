@@ -10,6 +10,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as python from '@aws-cdk/aws-lambda-python-alpha';
@@ -59,6 +60,10 @@ export interface OrchestrationStackProps extends cdk.StackProps {
   readonly knowledgeBaseId: string;
   readonly knowledgeBaseArn: string;
   readonly dataSourceId: string;
+  /** Cognito user-pool issuer URL — the `iss` claim the JWT authorizer validates. */
+  readonly authIssuerUrl: string;
+  /** Cognito app-client id — the `aud` claim the JWT authorizer validates. */
+  readonly authAudience: string;
 }
 
 /**
@@ -77,6 +82,7 @@ export class OrchestrationStack extends cdk.Stack {
   public readonly stateMachineArn: string;
   public readonly guardrailId: string;
   public readonly reviewApiUrl: string;
+  public readonly uploadApiUrl: string;
 
   constructor(scope: Construct, id: string, props: OrchestrationStackProps) {
     super(scope, id, props);
@@ -468,10 +474,31 @@ export class OrchestrationStack extends cdk.Stack {
       targets: [new targets.LambdaFunction(ingestionTriggerFn)],
     });
 
+    // ----- JWT authorization -----
+    // Both HTTP APIs used to be wide open: the URL was the only secret, and
+    // POST /approve writes SME-approved text straight into the corpus that
+    // seeds future answers. Every route on both APIs now requires a Cognito
+    // id token; the static shell stays public (ADR-7) because it carries no
+    // data and gating it would mean the login page needs a login.
+    //
+    // One authorizer instance per API on purpose: HttpJwtAuthorizer memoizes
+    // the HttpAuthorizer it creates on first bind, so a shared instance would
+    // silently attach the first API's authorizer to the second API's routes.
+    const jwtAuthorizer = (id: string): apigatewayv2Authorizers.HttpJwtAuthorizer =>
+      new apigatewayv2Authorizers.HttpJwtAuthorizer(id, props.authIssuerUrl, {
+        jwtAudience: [props.authAudience],
+        identitySource: ['$request.header.Authorization'],
+      });
+    const reviewAuthorizer = jwtAuthorizer('ReviewJwtAuthorizer');
+    const uploadAuthorizer = jwtAuthorizer('UploadJwtAuthorizer');
+
     // HTTP API for the review UI
     const httpApi = new apigatewayv2.HttpApi(this, 'ReviewHttpApi', {
       corsPreflight: {
-        allowHeaders: ['Content-Type'],
+        // Authorization is added because every route below now demands a
+        // bearer token; the browser will not send it without the preflight
+        // allowing the header.
+        allowHeaders: ['Content-Type', 'Authorization'],
         allowMethods: [apigatewayv2.CorsHttpMethod.GET, apigatewayv2.CorsHttpMethod.POST, apigatewayv2.CorsHttpMethod.OPTIONS],
         allowOrigins: props.corsOrigins,
       },
@@ -483,10 +510,10 @@ export class OrchestrationStack extends cdk.Stack {
     uploadApiFn.addEnvironment('CORS_ALLOW_ORIGIN', props.corsOrigins[0]);
 
     const reviewIntegration = new apigatewayv2Integrations.HttpLambdaIntegration('ReviewIntegration', reviewApiFn);
-    httpApi.addRoutes({ path: '/reviews',                   methods: [apigatewayv2.HttpMethod.GET],  integration: reviewIntegration });
-    httpApi.addRoutes({ path: '/reviews/{jobId}',           methods: [apigatewayv2.HttpMethod.GET],  integration: reviewIntegration });
-    httpApi.addRoutes({ path: '/reviews/{jobId}/approve',   methods: [apigatewayv2.HttpMethod.POST], integration: reviewIntegration });
-    httpApi.addRoutes({ path: '/reviews/{jobId}/reject',    methods: [apigatewayv2.HttpMethod.POST], integration: reviewIntegration });
+    httpApi.addRoutes({ path: '/reviews',                   methods: [apigatewayv2.HttpMethod.GET],  integration: reviewIntegration, authorizer: reviewAuthorizer });
+    httpApi.addRoutes({ path: '/reviews/{jobId}',           methods: [apigatewayv2.HttpMethod.GET],  integration: reviewIntegration, authorizer: reviewAuthorizer });
+    httpApi.addRoutes({ path: '/reviews/{jobId}/approve',   methods: [apigatewayv2.HttpMethod.POST], integration: reviewIntegration, authorizer: reviewAuthorizer });
+    httpApi.addRoutes({ path: '/reviews/{jobId}/reject',    methods: [apigatewayv2.HttpMethod.POST], integration: reviewIntegration, authorizer: reviewAuthorizer });
 
     this.reviewApiUrl = httpApi.apiEndpoint;
 
@@ -507,17 +534,19 @@ export class OrchestrationStack extends cdk.Stack {
 
     const uploadApi = new apigatewayv2.HttpApi(this, 'UploadApi', {
       corsPreflight: {
-        allowHeaders: ['Content-Type'],
+        allowHeaders: ['Content-Type', 'Authorization'],
         allowMethods: [apigatewayv2.CorsHttpMethod.GET, apigatewayv2.CorsHttpMethod.POST, apigatewayv2.CorsHttpMethod.OPTIONS],
         allowOrigins: props.corsOrigins,
       },
     });
     const uploadIntegration = new apigatewayv2Integrations.HttpLambdaIntegration('UploadIntegration', uploadApiFn);
-    uploadApi.addRoutes({ path: '/upload/presign',            methods: [apigatewayv2.HttpMethod.POST], integration: uploadIntegration });
-    uploadApi.addRoutes({ path: '/upload/{jobId}/start',      methods: [apigatewayv2.HttpMethod.POST], integration: uploadIntegration });
-    uploadApi.addRoutes({ path: '/upload/{jobId}/status',     methods: [apigatewayv2.HttpMethod.GET],  integration: uploadIntegration });
-    uploadApi.addRoutes({ path: '/upload/{jobId}/download',   methods: [apigatewayv2.HttpMethod.GET],  integration: uploadIntegration });
+    uploadApi.addRoutes({ path: '/upload/presign',            methods: [apigatewayv2.HttpMethod.POST], integration: uploadIntegration, authorizer: uploadAuthorizer });
+    uploadApi.addRoutes({ path: '/upload/{jobId}/start',      methods: [apigatewayv2.HttpMethod.POST], integration: uploadIntegration, authorizer: uploadAuthorizer });
+    uploadApi.addRoutes({ path: '/upload/{jobId}/status',     methods: [apigatewayv2.HttpMethod.GET],  integration: uploadIntegration, authorizer: uploadAuthorizer });
+    uploadApi.addRoutes({ path: '/upload/{jobId}/download',   methods: [apigatewayv2.HttpMethod.GET],  integration: uploadIntegration, authorizer: uploadAuthorizer });
 
-    new cdk.CfnOutput(this, 'UploadApiUrl', { value: uploadApi.apiEndpoint });
+    this.uploadApiUrl = uploadApi.apiEndpoint;
+
+    new cdk.CfnOutput(this, 'UploadApiUrl', { value: this.uploadApiUrl });
   }
 }

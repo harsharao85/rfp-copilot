@@ -34,8 +34,29 @@ s3 = boto3.client("s3")
 # — never to a particular site.
 CORS = {
     "Access-Control-Allow-Origin": os.environ.get("CORS_ALLOW_ORIGIN", "*"),
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
 }
+
+
+def jwt_actor(event: dict[str, Any]) -> str | None:
+    """Identity of the human making this call, from the verified JWT claims.
+
+    API Gateway's JWT authorizer has already validated signature, issuer,
+    audience and expiry by the time the claims reach here, so these are the only
+    trustworthy identity in the request — the request body is not. ``email``
+    is what an auditor reads; ``sub`` is the fallback for a pool configured
+    without an email claim, and is at least stable and unique.
+
+    Returns ``None`` when there are no claims at all, which is how the direct
+    unit-test calls and any future non-JWT invocation path stay working.
+    """
+    authorizer = event.get("requestContext", {}).get("authorizer") or {}
+    claims = (authorizer.get("jwt") or {}).get("claims") or {}
+    for key in ("email", "sub"):
+        value = claims.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _resp(status: int, body: Any) -> dict[str, Any]:
@@ -77,7 +98,7 @@ def list_reviews() -> dict[str, Any]:
     return _resp(200, {"reviews": jobs})
 
 
-def _mark_in_review(jobs_table: Any, job_id: str, current: str | None) -> None:
+def _mark_in_review(jobs_table: Any, job_id: str, current: str | None, actor: str) -> None:
     """Move AWAITING_REVIEW → IN_REVIEW on the first GET only.
 
     The condition on session_status is what makes "first only" true: a reviewer
@@ -101,16 +122,16 @@ def _mark_in_review(jobs_table: Any, job_id: str, current: str | None) -> None:
         if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
             raise
         return
-    session.log_step(job_id, session.IN_REVIEW, "sme", {}, reviewed_at=now)
+    session.log_step(job_id, session.IN_REVIEW, actor, {}, reviewed_at=now)
 
 
-def get_review(job_id: str) -> dict[str, Any]:
+def get_review(job_id: str, actor: str | None = None) -> dict[str, Any]:
     jobs_table = ddb.Table(os.environ["JOBS_TABLE"])
     job = jobs_table.get_item(Key={"jobId": job_id}).get("Item")
     if not job:
         return _resp(404, {"error": "job not found"})
 
-    _mark_in_review(jobs_table, job_id, job.get("session_status"))
+    _mark_in_review(jobs_table, job_id, job.get("session_status"), actor or "sme")
 
     questions_table = ddb.Table(os.environ["QUESTIONS_TABLE"])
     items: list[Any] = []
@@ -270,7 +291,7 @@ def _emit_sme_approved_to_kb(
     logger.info("review_api.sme_approved_written", job_id=job_id, count=written)
 
 
-def approve(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
+def approve(job_id: str, body: dict[str, Any], actor: str | None = None) -> dict[str, Any]:
     jobs_table = ddb.Table(os.environ["JOBS_TABLE"])
     job = jobs_table.get_item(Key={"jobId": job_id}).get("Item")
     if not job:
@@ -292,7 +313,10 @@ def approve(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
             )
 
     now = datetime.now(UTC).isoformat()
-    approved_by = body.get("approved_by", "sme")
+    # The verified JWT identity wins over anything the caller put in the body:
+    # this actor is the audit trail for a write that reaches the SME-approved
+    # corpus, and a self-declared one is not an audit trail.
+    approved_by = actor or body.get("approved_by", "sme")
     update = "SET review_status = :s, reviewed_at = :t, updated_at = :t, sme_edit_count = :n"
     values: dict[str, Any] = {":s": "APPROVED", ":t": now, ":n": len(answer_map)}
     try:
@@ -334,7 +358,7 @@ def approve(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
     return _resp(200, {"status": "approved"})
 
 
-def reject(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
+def reject(job_id: str, body: dict[str, Any], actor: str | None = None) -> dict[str, Any]:
     jobs_table = ddb.Table(os.environ["JOBS_TABLE"])
     job = jobs_table.get_item(Key={"jobId": job_id}).get("Item")
     if not job:
@@ -363,7 +387,7 @@ def reject(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
         session.log_step(
             job_id,
             next_status,
-            body.get("rejected_by", "sme"),
+            actor or body.get("rejected_by", "sme"),
             {"reason": reason},
             reviewed_at=now,
         )
@@ -385,14 +409,15 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     path_params = event.get("pathParameters") or {}
     job_id = path_params.get("jobId")
     body: dict[str, Any] = json.loads(event.get("body") or "{}")
+    actor = jwt_actor(event)
 
     if method == "GET" and path == "/reviews":
         return list_reviews()
     if method == "GET" and job_id and path.endswith(job_id):
-        return get_review(job_id)
+        return get_review(job_id, actor)
     if method == "POST" and job_id and path.endswith("/approve"):
-        return approve(job_id, body)
+        return approve(job_id, body, actor)
     if method == "POST" and job_id and path.endswith("/reject"):
-        return reject(job_id, body)
+        return reject(job_id, body, actor)
 
     return _resp(404, {"error": f"No route: {method} {path}"})

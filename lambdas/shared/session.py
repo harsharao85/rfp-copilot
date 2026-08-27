@@ -201,8 +201,10 @@ def log_step(
     """Append one row to Reviews. Returns True when the row was written.
 
     ``step`` is the ``session_status`` being entered. ``actor`` is ``"system"``
-    for pipeline transitions; a later unit swaps in the JWT identity for the
-    human-driven ones. ``detail`` is a small map whose shape depends on the
+    for pipeline transitions and, for the human-driven ones, the ``email``
+    claim of the reviewer's verified JWT (``sub`` when the pool carries no
+    email) — see ``review_api.handler.jwt_actor``. ``detail`` is a small map
+    whose shape depends on the
     step (``{question_count}``, ``{tier_counts}``, ``{edited, sme_edit_count}``,
     ``{reason}``).
 

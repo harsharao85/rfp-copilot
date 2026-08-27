@@ -7,6 +7,7 @@ import { KnowledgeBaseStack } from '../lib/knowledge-base-stack';
 import { OrchestrationStack } from '../lib/orchestration-stack';
 import { ObservabilityStack } from '../lib/observability-stack';
 import { StaticSiteStack } from '../lib/static-site-stack';
+import { AuthStack } from '../lib/auth-stack';
 
 const app = new cdk.App();
 
@@ -60,8 +61,40 @@ const knowledgeBase = new KnowledgeBaseStack(app, `${prefix}-knowledge-base`, {
   referenceKey: storage.referenceKey,
 });
 
+/**
+ * Cognito, and the ordering problem it creates.
+ *
+ * The Hosted UI needs callback URLs on the CloudFront domain; CloudFront is
+ * created by the static-site stack, which in turn needs the Cognito
+ * identifiers for its generated config.js. Construct references both ways is a
+ * cycle, so the site origin arrives as context instead:
+ *
+ *   pass 1: npx cdk deploy --all                  (callbacks are localhost)
+ *   pass 2: npx cdk deploy <auth-stack> \
+ *             -c siteUrl=https://<CloudFrontDomain from pass 1>
+ *
+ * Only the auth stack changes on pass 2 — nothing else reads siteUrl.
+ * `cognitoDomainPrefix` overrides the Hosted UI prefix, which must be globally
+ * unique in the region; the default appends the account id for that reason.
+ */
+const siteUrlContext: unknown = app.node.tryGetContext('siteUrl');
+const siteUrl: string | undefined =
+  typeof siteUrlContext === 'string' && siteUrlContext.trim() !== ''
+    ? siteUrlContext.trim().replace(/\/+$/, '')
+    : undefined;
+
+const auth = new AuthStack(app, `${prefix}-auth`, {
+  env,
+  siteUrl,
+  domainPrefix:
+    (app.node.tryGetContext('cognitoDomainPrefix') as string | undefined) ??
+    `${prefix}-${cdk.Aws.ACCOUNT_ID}`,
+});
+
 const orchestration = new OrchestrationStack(app, `${prefix}-orchestration`, {
   env,
+  authIssuerUrl: auth.issuerUrl,
+  authAudience: auth.userPoolClientId,
   corsOrigins,
   incomingBucket: storage.incomingBucket,
   outputBucket: storage.outputBucket,
@@ -84,7 +117,24 @@ new ObservabilityStack(app, `${prefix}-observability`, {
 
 // No custom domain, so no ACM certificate, so no us-east-1 pin: the site
 // stack deploys into the same region as everything else.
-const staticSite = new StaticSiteStack(app, `${prefix}-static-site`, { env });
+// The site learns its endpoints from generated config.js, not from literals
+// checked into ui/*.html — see static-site-stack.
+const staticSite = new StaticSiteStack(app, `${prefix}-static-site`, {
+  env,
+  uploadApiUrl: orchestration.uploadApiUrl,
+  reviewApiUrl: orchestration.reviewApiUrl,
+  userPoolId: auth.userPoolId,
+  userPoolClientId: auth.userPoolClientId,
+  hostedUiUrl: auth.hostedUiUrl,
+});
+
+if (!siteUrl) {
+  cdk.Annotations.of(auth).addWarning(
+    'siteUrl context is unset, so the Cognito callback URLs are localhost-only ' +
+      'and the Hosted UI will reject a login from CloudFront. After the first ' +
+      'deploy, re-run with -c siteUrl=https://<CloudFrontDomain>.',
+  );
+}
 
 if (corsIsWildcardDefault) {
   const message =

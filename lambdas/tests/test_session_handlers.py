@@ -366,6 +366,130 @@ def test_reject_logs_the_reason(review: Any, aws: Any) -> None:
     assert rows[0]["detail"]["reason"] == "pricing question, needs commercial"
 
 
+# ---------------------------------------------------------------------------
+# review_api — the actor on a human action is the verified JWT identity
+# ---------------------------------------------------------------------------
+
+
+def _jwt_event(
+    job_id: str,
+    route: str,
+    claims: dict[str, Any] | None,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """An HTTP API v2 proxy event as the JWT authorizer delivers it."""
+    request_context: dict[str, Any] = {"http": {"method": "POST"}}
+    if claims is not None:
+        request_context["authorizer"] = {"jwt": {"claims": claims, "scopes": None}}
+    return {
+        "rawPath": f"/reviews/{job_id}/{route}",
+        "requestContext": request_context,
+        "pathParameters": {"jobId": job_id},
+        "body": json.dumps(body or {}),
+    }
+
+
+def test_approve_records_the_email_claim_as_actor(review: Any, aws: Any) -> None:
+    _awaiting_job(aws)
+
+    review.lambda_handler(
+        _jwt_event(
+            "job-1",
+            "approve",
+            {"email": "r.sandhu@example.com", "sub": "3f9c-uuid"},
+            {"answers": []},
+        ),
+        None,
+    )
+
+    rows = aws.reviews("job-1")
+    assert [r["step"] for r in rows] == [session.APPROVED]
+    assert rows[0]["actor"] == "r.sandhu@example.com"
+
+
+def test_approve_falls_back_to_sub_when_there_is_no_email_claim(review: Any, aws: Any) -> None:
+    _awaiting_job(aws)
+
+    review.lambda_handler(
+        _jwt_event("job-1", "approve", {"sub": "3f9c-uuid"}, {"answers": []}), None
+    )
+
+    assert aws.reviews("job-1")[0]["actor"] == "3f9c-uuid"
+
+
+def test_a_body_supplied_actor_cannot_override_the_jwt(review: Any, aws: Any) -> None:
+    """The Reviews row is the audit trail for a write that seeds the corpus.
+    An actor the caller declares about itself is not an audit trail."""
+    _awaiting_job(aws)
+
+    review.lambda_handler(
+        _jwt_event(
+            "job-1",
+            "approve",
+            {"email": "r.sandhu@example.com"},
+            {"answers": [], "approved_by": "somebody.else@example.com"},
+        ),
+        None,
+    )
+
+    assert aws.reviews("job-1")[0]["actor"] == "r.sandhu@example.com"
+
+
+def test_the_jwt_identity_is_stamped_on_the_sme_approved_corpus_document(
+    review: Any, aws: Any
+) -> None:
+    """UOW-E feeds approved answers back into the knowledge base, so the
+    identity that approved one has to survive into its metadata sidecar."""
+    _awaiting_job(aws)
+    aws.ddb.Table(QUESTIONS).put_item(
+        Item={"jobId": "job-1", "questionId": "q-0001", "text": "Key rotation?", "answer_text": "a"}
+    )
+
+    review.lambda_handler(
+        _jwt_event("job-1", "approve", {"email": "r.sandhu@example.com"}, {"answers": []}), None
+    )
+
+    keys = [
+        o["Key"]
+        for o in aws.s3.list_objects_v2(Bucket=CORPUS, Prefix="sme-approved/").get("Contents", [])
+        if o["Key"].endswith(".metadata.json")
+    ]
+    assert keys
+    sidecar = json.loads(aws.s3.get_object(Bucket=CORPUS, Key=keys[0])["Body"].read())
+    assert sidecar["metadataAttributes"]["approved_by"] == "r.sandhu@example.com"
+
+
+def test_reject_records_the_jwt_identity(review: Any, aws: Any) -> None:
+    _awaiting_job(aws)
+
+    review.lambda_handler(
+        _jwt_event("job-1", "reject", {"email": "r.sandhu@example.com"}, {"reason": "pricing"}),
+        None,
+    )
+
+    rows = aws.reviews("job-1")
+    assert [r["step"] for r in rows] == [session.REJECTED]
+    assert rows[0]["actor"] == "r.sandhu@example.com"
+
+
+def test_jwt_actor_ignores_blank_and_missing_claims(review: Any) -> None:
+    """No authorizer, an empty claims map, or a whitespace-only claim all mean
+    'no verified identity' — the caller then falls back, rather than writing
+    an actor of ''."""
+    assert review.jwt_actor({}) is None
+    assert review.jwt_actor({"requestContext": {"authorizer": {"jwt": {"claims": {}}}}}) is None
+    assert (
+        review.jwt_actor({"requestContext": {"authorizer": {"jwt": {"claims": {"email": "  "}}}}})
+        is None
+    )
+    assert (
+        review.jwt_actor(
+            {"requestContext": {"authorizer": {"jwt": {"claims": {"email": " a@b.c "}}}}}
+        )
+        == "a@b.c"
+    )
+
+
 def test_one_row_per_transition_across_the_whole_workflow(
     upload: Any, review: Any, gate: Any, aws: Any
 ) -> None:
