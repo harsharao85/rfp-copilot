@@ -507,6 +507,19 @@ _LAMBDAS = Path(__file__).resolve().parent.parent
 
 
 def _load_lambda_module(package: str, alias: str, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Import a handler the way the Lambda runtime does, with AWS stubbed out.
+
+    Both handlers build their boto3 client at module scope, so a bare import
+    resolves the local credential chain — which makes the result depend on
+    whatever AWS config the developer happens to have. (An SSO/`login` profile
+    raises MissingDependencyException without botocore[crt]; an empty
+    environment quietly succeeds.) Stubbing before exec keeps the test about
+    the serialisation helpers and nothing else.
+    """
+    import boto3
+
+    monkeypatch.setattr(boto3, "resource", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(boto3, "client", lambda *a, **k: MagicMock())
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     monkeypatch.syspath_prepend(str(_LAMBDAS / package))
     spec = importlib.util.spec_from_file_location(alias, _LAMBDAS / package / "handler.py")
