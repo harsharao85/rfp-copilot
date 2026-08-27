@@ -24,6 +24,7 @@ from typing import Any
 import boto3
 from botocore.config import Config
 
+from shared import session
 from shared.logging_config import configure_logging
 
 logger = configure_logging()
@@ -93,18 +94,38 @@ def presign(body: dict[str, Any]) -> dict[str, Any]:
         ExpiresIn=300,  # 5 minutes
     )
 
+    # session_status is the authoritative lifecycle; `status` stays exactly as
+    # it was so the existing upload-page polling is unaffected.
     _ddb().Table(os.environ["JOBS_TABLE"]).put_item(
         Item={
             "jobId": job_id,
             "status": "UPLOADING",
+            "session_status": session.advance(None, session.PRESIGN),
             "key": key,
             "filename": safe_name,
             "created_at": now,
+            "updated_at": now,
+            "sme_edit_count": 0,
         }
     )
+    session.log_step(job_id, session.CREATED, "system", {}, reviewed_at=now)
 
     logger.info("upload_api.presigned", job_id=job_id, key=key)
     return _resp(200, {"uploadUrl": upload_url, "bucket": bucket, "key": key, "jobId": job_id})
+
+
+def _try_advance(job_id: str, current: str | None, event: str) -> str | None:
+    """advance() that logs and returns None instead of failing the request.
+
+    A replayed or out-of-order call must not write an illegal session_status,
+    but it must also not break an upload the user is watching. The illegal move
+    is refused; the rest of the route carries on as it did before.
+    """
+    try:
+        return session.advance(current, event)
+    except session.InvalidTransitionError as exc:
+        logger.warning("upload_api.illegal_transition", job_id=job_id, error=str(exc))
+        return None
 
 
 def start(job_id: str) -> dict[str, Any]:
@@ -118,18 +139,45 @@ def start(job_id: str) -> dict[str, Any]:
     key = job["key"]
     sm_arn = os.environ["STATE_MACHINE_ARN"]
 
+    # The bytes are in S3 by the time the browser calls /start — that is a
+    # distinct lifecycle fact from "the pipeline is running", and the audit
+    # trail records both.
+    current = job.get("session_status") or session.CREATED
+    uploaded = _try_advance(job_id, current, session.UPLOAD_COMPLETE)
+    if uploaded:
+        now = session.now_iso()
+        jobs_table.update_item(
+            Key={"jobId": job_id},
+            UpdateExpression="SET session_status = :ss, updated_at = :u",
+            ExpressionAttributeValues={":ss": uploaded, ":u": now},
+        )
+        session.log_step(job_id, uploaded, "system", {}, reviewed_at=now)
+
     _sfn().start_execution(
         stateMachineArn=sm_arn,
         name=job_id,
         input=json.dumps({"bucket": bucket, "key": key, "jobId": job_id}),
     )
 
-    jobs_table.update_item(
-        Key={"jobId": job_id},
-        UpdateExpression="SET #s = :s",
-        ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={":s": "PROCESSING"},
-    )
+    processing = _try_advance(job_id, uploaded or current, session.EXECUTION_STARTED)
+    now = session.now_iso()
+    if processing:
+        jobs_table.update_item(
+            Key={"jobId": job_id},
+            UpdateExpression="SET #s = :s, session_status = :ss, updated_at = :u",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "PROCESSING", ":ss": processing, ":u": now},
+        )
+    else:
+        jobs_table.update_item(
+            Key={"jobId": job_id},
+            UpdateExpression="SET #s = :s, updated_at = :u",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "PROCESSING", ":u": now},
+        )
+    # The PROCESSING audit row is written by excel_parser, which is the first
+    # place question_count — the detail the ruling asks for on that step — is
+    # known. One row per transition, written where it can say something.
 
     logger.info("upload_api.started", job_id=job_id)
     return _resp(200, {"jobId": job_id, "status": "PROCESSING"})
@@ -143,12 +191,24 @@ def status(job_id: str) -> dict[str, Any]:
 
     review_status = job.get("review_status", "")
     raw_status = job.get("status", "UPLOADING")
+    session_status = job.get("session_status", "")
 
-    # Map to upload UI status labels
-    if review_status == "PENDING":
+    # Map to upload UI status labels.
+    #
+    # SUCCEEDED is what makes the review page hand over a download link, so it
+    # must not be reported until the *final* workbook — the one containing the
+    # SME's own edits — has been written. Between approval and that write the
+    # job reports FINALIZING, which both UIs treat as "keep polling".
+    # A job with no session_status at all is pre-lifecycle: fall back to the
+    # original mapping rather than stranding it.
+    if session_status == "FAILED":
+        derived = "FAILED"
+    elif session_status == "COMPLETE":
+        derived = "SUCCEEDED"
+    elif review_status == "PENDING":
         derived = "WAITING_FOR_REVIEW"
     elif review_status == "APPROVED":
-        derived = "SUCCEEDED"
+        derived = "SUCCEEDED" if not session_status else "FINALIZING"
     elif review_status == "REJECTED":
         derived = "FAILED"
     else:
@@ -161,6 +221,7 @@ def status(job_id: str) -> dict[str, Any]:
             "status": derived,
             "outputKey": job.get("output_key", ""),
             "reviewStatus": review_status,
+            "sessionStatus": session_status,
             "createdAt": job.get("created_at", ""),
         },
     )

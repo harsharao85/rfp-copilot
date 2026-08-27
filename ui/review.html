@@ -135,6 +135,13 @@ function tierPill(tier) {
   return `<span class="tier-pill tier-${tier}">${tier.toUpperCase()}</span>`;
 }
 
+// Scale before opening: green/amber/red split, written by the draft workbook pass.
+function tierSummary(counts) {
+  if (!counts || !Object.keys(counts).length) return '';
+  const g = counts.green || 0, a = counts.amber || 0, r = counts.red || 0;
+  return ` · ${g} green / ${a} amber / ${r} red`;
+}
+
 // ---- List view ----
 async function showList() {
   $('back-btn').style.display = 'none';
@@ -149,7 +156,7 @@ async function showList() {
       <li class="job-item">
         <div>
           <strong>${r.jobId}</strong>
-          <div class="job-meta">${r.reviewRequestedAt ? new Date(r.reviewRequestedAt).toLocaleString() : ''} · ${r.answerCount} answers</div>
+          <div class="job-meta">${r.reviewRequestedAt ? new Date(r.reviewRequestedAt).toLocaleString() : ''} · ${r.answerCount} answers${tierSummary(r.tierCounts)}</div>
         </div>
         <button class="btn btn-primary btn-sm" onclick="showReview('${r.jobId}')">Review →</button>
       </li>`).join('');

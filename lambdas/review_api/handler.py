@@ -18,7 +18,9 @@ from typing import Any
 
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
+from botocore.exceptions import ClientError
 
+from shared import session
 from shared.logging_config import configure_logging
 
 logger = configure_logging()
@@ -65,6 +67,9 @@ def list_reviews() -> dict[str, Any]:
             "jobId": j["jobId"],
             "reviewRequestedAt": j.get("review_requested_at", ""),
             "answerCount": int(j.get("question_count", 0)),
+            # Scale before opening: how many of those answers are green/amber/red.
+            "tierCounts": _d2f(j.get("tier_counts", {})),
+            "sessionStatus": j.get("session_status", ""),
             "outputKey": j.get("output_key", ""),
         }
         for j in resp.get("Items", [])
@@ -72,11 +77,40 @@ def list_reviews() -> dict[str, Any]:
     return _resp(200, {"reviews": jobs})
 
 
+def _mark_in_review(jobs_table: Any, job_id: str, current: str | None) -> None:
+    """Move AWAITING_REVIEW → IN_REVIEW on the first GET only.
+
+    The condition on session_status is what makes "first only" true: a reviewer
+    who refreshes the page, or two reviewers who open the same job, produce one
+    IN_REVIEW row between them, not one each.
+    """
+    if current != session.AWAITING_REVIEW:
+        return
+    now = session.now_iso()
+    try:
+        jobs_table.update_item(
+            Key={"jobId": job_id},
+            UpdateExpression="SET session_status = :ss, updated_at = :u",
+            ConditionExpression=Attr("session_status").eq(session.AWAITING_REVIEW),
+            ExpressionAttributeValues={
+                ":ss": session.advance(current, session.REVIEW_OPENED),
+                ":u": now,
+            },
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+        return
+    session.log_step(job_id, session.IN_REVIEW, "sme", {}, reviewed_at=now)
+
+
 def get_review(job_id: str) -> dict[str, Any]:
     jobs_table = ddb.Table(os.environ["JOBS_TABLE"])
     job = jobs_table.get_item(Key={"jobId": job_id}).get("Item")
     if not job:
         return _resp(404, {"error": "job not found"})
+
+    _mark_in_review(jobs_table, job_id, job.get("session_status"))
 
     questions_table = ddb.Table(os.environ["QUESTIONS_TABLE"])
     items: list[Any] = []
@@ -150,15 +184,27 @@ def _emit_sme_approved_to_kb(
     answer_map: dict[str, str],
     now_iso: str,
 ) -> None:
-    """Write each SME-reviewed Q&A to S3 as markdown + Bedrock metadata sidecar.
+    """Write each approved Q&A to S3 as markdown + Bedrock metadata sidecar.
+
     The PutObject events fire the ingestion_trigger Lambda automatically
     (subscribed to this bucket in orchestration-stack), so no explicit
     StartIngestionJob call is needed here. Approval benefits future RFPs,
     not the in-flight one — a ~1-3 minute index lag is acceptable.
+
+    Every answered question is emitted, green included. An earlier version
+    emitted only the reviewer-flagged and amber/red rows, which meant the
+    flywheel learned from the answers the machine was *worst* at and threw away
+    the majority it was best at. What the human approves is the filled-out
+    questionnaire, not the difficult half of it.
     """
     bucket = os.environ["REFERENCE_CORPUS_BUCKET"]
-    approved_at_date = now_iso[:10]  # sidecar uses ISO date for lexicographic compare
-    expires_on = (datetime.now(UTC) + timedelta(days=730)).date().isoformat()
+    approved_at_date = now_iso[:10]  # human-facing date in the markdown body
+    # Sidecar timestamps are full ISO-8601 with offset. Bedrock KB metadata
+    # filters compare these lexicographically, and a fixed-width YYYY-MM-DD
+    # prefix means the offset form still sorts against date-only values written
+    # by earlier runs and by the corpus generator.
+    approved_at_iso = now_iso
+    expires_on = (datetime.now(UTC) + timedelta(days=730)).isoformat()
 
     questions_table = ddb.Table(os.environ["QUESTIONS_TABLE"])
     items: list[Any] = []
@@ -172,13 +218,12 @@ def _emit_sme_approved_to_kb(
 
     written = 0
     for q in items:
-        if not (q.get("reviewer_required") or q.get("tier") in ("amber", "red")):
-            continue
         qid = q["questionId"]
         answer_text = answer_map.get(qid) or q.get("answer_text", "")
         question_text = q.get("text", "")
         if not answer_text or not question_text:
             continue
+        sme_edited = bool(q.get("sme_edited")) or qid in answer_map
         # Deterministic doc_id from question text so re-approvals overwrite
         # prior version rather than accumulate duplicates in the KB.
         doc_id = "lfb-" + hashlib.sha256(question_text.encode("utf-8")).hexdigest()[:16]
@@ -194,14 +239,19 @@ def _emit_sme_approved_to_kb(
             question_text=question_text,
             answer_text=answer_text,
         )
+        # Kept flat and small — S3 Vectors caps filterable metadata at 2 KB per
+        # vector. sme_edited and source_job_id are what let a later reviewer
+        # tell a human-corrected answer from an accepted machine one.
         sidecar = {
             "metadataAttributes": {
                 "document_id": doc_id,
                 "source_type": "sme_approved_answer",
                 "topic_ids": topic_ids,
-                "approved_at": approved_at_date,
+                "approved_at": approved_at_iso,
                 "approved_by": approved_by,
                 "expires_on": expires_on,
+                "sme_edited": sme_edited,
+                "source_job_id": job_id,
                 "question_text": question_text[:500],  # cap for sidecar size safety
             }
         }
@@ -242,11 +292,30 @@ def approve(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
             )
 
     now = datetime.now(UTC).isoformat()
+    approved_by = body.get("approved_by", "sme")
+    update = "SET review_status = :s, reviewed_at = :t, updated_at = :t, sme_edit_count = :n"
+    values: dict[str, Any] = {":s": "APPROVED", ":t": now, ":n": len(answer_map)}
+    try:
+        next_status: str | None = session.advance(
+            str(job.get("session_status") or session.AWAITING_REVIEW), session.APPROVE
+        )
+    except session.InvalidTransitionError as exc:
+        logger.warning("review_api.illegal_transition", job_id=job_id, error=str(exc))
+        next_status = None
+    if next_status:
+        update += ", session_status = :ss"
+        values[":ss"] = next_status
     jobs_table.update_item(
-        Key={"jobId": job_id},
-        UpdateExpression="SET review_status = :s, reviewed_at = :t",
-        ExpressionAttributeValues={":s": "APPROVED", ":t": now},
+        Key={"jobId": job_id}, UpdateExpression=update, ExpressionAttributeValues=values
     )
+    if next_status:
+        session.log_step(
+            job_id,
+            next_status,
+            approved_by,
+            {"edited": sorted(answer_map), "sme_edit_count": len(answer_map)},
+            reviewed_at=now,
+        )
 
     sfn.send_task_success(
         taskToken=job["task_token"],
@@ -257,7 +326,6 @@ def approve(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
     # Flywheel write — best-effort after resuming execution.
     # Writes Q&A to S3 + triggers KB ingestion. Approved answers become
     # semantically retrievable in ~1-3 min (next ingestion run).
-    approved_by = body.get("approved_by", "sme")
     try:
         _emit_sme_approved_to_kb(job_id, approved_by, answer_map, now)
     except Exception as exc:
@@ -275,11 +343,30 @@ def reject(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
         return _resp(409, {"error": f"job already {job.get('review_status')}"})
 
     reason = body.get("reason", "Rejected by SME")
+    now = datetime.now(UTC).isoformat()
+    update = "SET review_status = :s, reject_reason = :r, updated_at = :t"
+    values: dict[str, Any] = {":s": "REJECTED", ":r": reason, ":t": now}
+    try:
+        next_status: str | None = session.advance(
+            str(job.get("session_status") or session.AWAITING_REVIEW), session.REJECT
+        )
+    except session.InvalidTransitionError as exc:
+        logger.warning("review_api.illegal_transition", job_id=job_id, error=str(exc))
+        next_status = None
+    if next_status:
+        update += ", session_status = :ss"
+        values[":ss"] = next_status
     jobs_table.update_item(
-        Key={"jobId": job_id},
-        UpdateExpression="SET review_status = :s, reject_reason = :r",
-        ExpressionAttributeValues={":s": "REJECTED", ":r": reason},
+        Key={"jobId": job_id}, UpdateExpression=update, ExpressionAttributeValues=values
     )
+    if next_status:
+        session.log_step(
+            job_id,
+            next_status,
+            body.get("rejected_by", "sme"),
+            {"reason": reason},
+            reviewed_at=now,
+        )
     sfn.send_task_failure(
         taskToken=job["task_token"],
         error="SMEReject",

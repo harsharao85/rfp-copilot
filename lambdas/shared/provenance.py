@@ -29,7 +29,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 __all__ = ["Provenance", "Citation", "render_citation", "AnswerAudience"]
 
@@ -69,6 +69,25 @@ class Provenance(BaseModel):
 
     evidence_refs: list[str] = Field(default_factory=list)
     topic_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("answered_at", "approved_at", "expires_on", mode="after")
+    @classmethod
+    def _assume_utc(cls, value: datetime | None) -> datetime | None:
+        """Force every timestamp on this model to be timezone-aware.
+
+        Sidecars in the wild carry bare dates — `"2025-06-30"` — because a
+        date-only value is what a human writes and what the corpus generator
+        emits. Python parses that into a *naive* datetime, and comparing a naive
+        datetime to `datetime.now(UTC)` raises TypeError rather than returning
+        False. That crash surfaced in `render_citation`, i.e. while writing the
+        output workbook, which is the worst possible place to discover it.
+
+        UTC is the right assumption: everything upstream — Bedrock KB metadata,
+        DynamoDB timestamps, the S3 corpus — is written in UTC.
+        """
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
 
     @property
     def is_expired(self) -> bool:
@@ -127,9 +146,14 @@ class Provenance(BaseModel):
             if not raw:
                 return None
             try:
-                return datetime.fromisoformat(str(raw))
+                parsed = datetime.fromisoformat(str(raw))
             except ValueError:
                 return None
+            # A date-only sidecar value parses naive; assume UTC so downstream
+            # comparisons against datetime.now(UTC) work. The model validator
+            # enforces this too — this is the explicit statement of it at the
+            # boundary where the bare dates actually arrive.
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
         return cls(
             document_id=str(attrs.get("document_id", "")),

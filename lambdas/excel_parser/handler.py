@@ -11,6 +11,7 @@ from typing import Any
 import boto3
 from parser import parse_workbook
 
+from shared import session
 from shared.logging_config import bind_job_context, configure_logging
 
 logger = configure_logging()
@@ -44,15 +45,28 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             item["questionId"] = item.pop("question_id")
             batch.put_item(Item=item)
 
+    # question_count is what the review queue renders as the answer count for
+    # each waiting job; it is written here because this is the first point in
+    # the pipeline that knows it.
+    now = datetime.now(UTC).isoformat()
     jobs_table = ddb.Table(os.environ["JOBS_TABLE"])
     jobs_table.update_item(
         Key={"jobId": job_id},
-        UpdateExpression="SET parsed_at = :t, question_count = :c, sources = :s",
+        UpdateExpression=("SET parsed_at = :t, question_count = :c, sources = :s, updated_at = :t"),
         ExpressionAttributeValues={
-            ":t": datetime.now(UTC).isoformat(),
+            ":t": now,
             ":c": len(questions),
             ":s": {"bucket": bucket, "key": key},
         },
+    )
+    # PROCESSING was entered by upload_api.start; its audit row is written here
+    # so it can carry the question count.
+    session.log_step(
+        job_id,
+        session.PROCESSING,
+        "system",
+        {"question_count": len(questions)},
+        reviewed_at=now,
     )
 
     # Write a question manifest to S3 for the writer Lambda and audit trail.

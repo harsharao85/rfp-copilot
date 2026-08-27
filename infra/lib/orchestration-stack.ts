@@ -140,6 +140,7 @@ export class OrchestrationStack extends cdk.Stack {
     const sharedEnv: Record<string, string> = {
       JOBS_TABLE: props.jobsTable.tableName,
       QUESTIONS_TABLE: props.questionsTable.tableName,
+      REVIEWS_TABLE: props.reviewsTable.tableName,
       CUSTOMER_REFS_TABLE: props.customerRefsTable.tableName,
       REFERENCE_CORPUS_BUCKET: props.referenceCorpusBucket.bucketName,
       KNOWLEDGE_BASE_ID: props.knowledgeBaseId,
@@ -147,7 +148,7 @@ export class OrchestrationStack extends cdk.Stack {
       GUARDRAIL_ID: this.guardrailId,
       GUARDRAIL_VERSION: 'DRAFT',
       LOG_LEVEL: 'INFO',
-      SHARED_VERSION: '13',
+      SHARED_VERSION: '14',
       OUTPUT_BUCKET: props.outputBucket.bucketName,
     };
 
@@ -215,6 +216,13 @@ export class OrchestrationStack extends cdk.Stack {
     props.questionsTable.grantReadWriteData(scorerFn);
     props.questionsTable.grantReadWriteData(rulesFn);
     props.questionsTable.grantReadData(writerFn);
+
+    // Reviews is the append-only HITL step log: one row per session_status
+    // transition. Write-only everywhere — nothing in the pipeline reads it
+    // back, and an audit trail a handler can rewrite is not an audit trail.
+    for (const fn of [uploadApiFn, reviewApiFn, reviewGateFn, parserFn, writerFn]) {
+      props.reviewsTable.grantWriteData(fn);
+    }
 
     props.customerRefsTable.grantReadData(retrieverFn);
     // UpdateItem only — retriever writes suppressed_prior_count to existing question items
@@ -310,7 +318,15 @@ export class OrchestrationStack extends cdk.Stack {
     });
     map.itemProcessor(perQuestion);
 
-    const write = new sfnTasks.LambdaInvoke(this, 'WriteOutputWorkbook', {
+    // The workbook is written twice, by the same Lambda.
+    //
+    // The draft pass runs before the gate: it is what the SME opens and reads
+    // during review. The final pass runs after it, once review_api has written
+    // the SME's edits back to the Questions table — the writer re-reads
+    // Questions on every pass, so the edits need no special handling. Without
+    // the second pass the human downloads the pre-edit workbook, which is to
+    // say: not the questionnaire they just filled out.
+    const writeDraft = new sfnTasks.LambdaInvoke(this, 'WriteOutputWorkbook', {
       lambdaFunction: writerFn,
       payloadResponseOnly: true,
       resultPath: '$.output',
@@ -318,6 +334,19 @@ export class OrchestrationStack extends cdk.Stack {
         jobId: sfn.JsonPath.stringAt('$.jobId'),
         sourceBucket: sfn.JsonPath.stringAt('$.bucket'),
         sourceKey: sfn.JsonPath.stringAt('$.key'),
+        stage: 'draft',
+      }),
+    });
+
+    const writeFinal = new sfnTasks.LambdaInvoke(this, 'WriteFinalWorkbook', {
+      lambdaFunction: writerFn,
+      payloadResponseOnly: true,
+      resultPath: '$.finalOutput',
+      payload: sfn.TaskInput.fromObject({
+        jobId: sfn.JsonPath.stringAt('$.jobId'),
+        sourceBucket: sfn.JsonPath.stringAt('$.bucket'),
+        sourceKey: sfn.JsonPath.stringAt('$.key'),
+        stage: 'final',
       }),
     });
 
@@ -339,7 +368,27 @@ export class OrchestrationStack extends cdk.Stack {
       // Add heartbeatTimeout for prod SLA enforcement.
     });
 
-    const definition = parse.next(map).next(write).next(reviewGate);
+    // Terminal failure path. Reuses reviewGateFn — invoked without a task
+    // token, which is how that handler tells a Catch from a review park — so
+    // one Lambda owns every lifecycle write the state machine makes. It
+    // refuses to overwrite a terminal status, so a job the SME rejected stays
+    // REJECTED rather than being relabelled FAILED by its own SendTaskFailure.
+    const markFailed = new sfnTasks.LambdaInvoke(this, 'MarkJobFailed', {
+      lambdaFunction: reviewGateFn,
+      payloadResponseOnly: true,
+      resultPath: sfn.JsonPath.DISCARD,
+      payload: sfn.TaskInput.fromObject({
+        jobId: sfn.JsonPath.stringAt('$.jobId'),
+        error: sfn.JsonPath.stringAt('$.error.Error'),
+        cause: sfn.JsonPath.stringAt('$.error.Cause'),
+      }),
+    }).next(new sfn.Fail(this, 'JobFailed', { comment: 'Pipeline failed; job marked FAILED' }));
+
+    for (const state of [parse, map, writeDraft, reviewGate, writeFinal]) {
+      state.addCatch(markFailed, { errors: ['States.ALL'], resultPath: '$.error' });
+    }
+
+    const definition = parse.next(map).next(writeDraft).next(reviewGate).next(writeFinal);
 
     const logGroup = new logs.LogGroup(this, 'StateMachineLogGroup', {
       retention: logs.RetentionDays.ONE_MONTH,
