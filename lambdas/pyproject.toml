@@ -23,7 +23,8 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["shared*", "excel_parser*", "question_classifier*", "retriever*",
-           "generator*", "confidence_scorer*", "hard_rules*", "excel_writer*"]
+           "generator*", "confidence_scorer*", "hard_rules*", "excel_writer*",
+           "ingestion*", "divergence*"]
 
 [tool.ruff]
 line-length = 100

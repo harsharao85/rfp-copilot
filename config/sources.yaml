@@ -1,0 +1,129 @@
+# Corpus source configuration.
+#
+# This file is the whole surface for adding a repository. Adding a source
+# should mean adding a block here plus (for a new type) a connector class --
+# never a new bucket, knowledge base or vector index. One KB, discriminated by
+# the `source_type` sidecar the retriever already filters on.
+#
+# Fields
+# ------
+# type              registry key in lambdas/ingestion/connectors.py
+# enabled           false leaves the block as documentation; nothing runs
+# source_type       sidecar discriminator, drives retrieval filtering and the
+#                   source-authority weighting in confidence_scorer
+# redaction_profile strict | standard | off  (lambdas/shared/redaction.py)
+# ingest_path       gate   -> redact before Bedrock ever sees the text
+#                   native -> Bedrock KB connector + POST_CHUNKING transform;
+#                             raw text transits the intermediate bucket.
+#                             Requires the mitigations in the connectors
+#                             module docstring. Never set this casually.
+#
+# Precedence when two sources disagree is NOT set here -- it is the
+# source-authority weighting in confidence_scorer, which is deliberately a
+# code decision with a test behind it rather than a config knob someone can
+# quietly change.
+
+version: 1
+
+defaults:
+  redaction_profile: strict
+  ingest_path: gate
+
+sources:
+
+  # ---- POC: the golden dataset -------------------------------------------
+  # Single source of truth for the proof of concept. Curated, SME-approved
+  # question/answer pairs. Split this before Phase 3: the evaluation harness
+  # needs a held-back set it has never been embedded against, or the accuracy
+  # figure measures memorisation rather than retrieval.
+  - id: golden-questionnaire
+    type: golden_questionnaire
+    enabled: true
+    path: data/golden/approved
+    source_type: golden_qa
+    redaction_profile: strict
+    ingest_path: gate
+
+  # Held-back evaluation split. Never ingested -- present here so the split is
+  # visible and version-controlled rather than living in someone's notebook.
+  - id: golden-questionnaire-holdout
+    type: golden_questionnaire
+    enabled: false
+    path: data/golden/holdout
+    source_type: golden_qa_holdout
+    redaction_profile: strict
+    ingest_path: gate
+
+  # ---- Generic drop-in bucket --------------------------------------------
+  # The fastest way to onboard a new repository without writing a connector:
+  # export to this prefix and it flows through the same gate. Recommended
+  # first step for any new source, before committing to a bespoke integration.
+  - id: policy-docs-s3
+    type: s3_prefix
+    enabled: false
+    bucket: ${REFERENCE_CORPUS_RAW_BUCKET}
+    prefix: policy-docs/
+    suffixes: [".md", ".txt", ".pdf"]
+    source_type: compliance_cert
+    redaction_profile: strict
+    ingest_path: gate
+
+  # ---- Placeholders ------------------------------------------------------
+  # Enabled=false. Each connector raises NotImplementedError listing the
+  # decisions its implementation needs -- auth model, scope, and whether
+  # source-side permissions must survive into retrieval. That last one is a
+  # policy question and should not be answered by whoever writes the code.
+
+  - id: confluence-security-space
+    type: confluence
+    enabled: false
+    base_url: https://REPLACE.atlassian.net/wiki
+    space_keys: [SEC, COMPLIANCE]
+    exclude_archived: true
+    source_type: product_doc
+    redaction_profile: strict
+    ingest_path: gate
+    auth:
+      mode: agentcore_identity   # obo | service_account | agentcore_identity
+      credential_provider: ""    # AgentCore Identity provider name
+
+  - id: sharepoint-policy-library
+    type: sharepoint
+    enabled: false
+    tenant_id: ""
+    site_ids: []                 # Sites.Selected, named sites only
+    library_names: ["Policies", "Certifications"]
+    source_type: compliance_cert
+    redaction_profile: strict
+    ingest_path: gate
+    auth:
+      mode: agentcore_identity
+      credential_provider: ""
+
+  - id: trust-portal
+    type: trust_portal
+    enabled: false
+    base_url: ""
+    # Already public, so pseudonymisation adds noise for no privacy gain --
+    # but the credential detector still runs under 'off'.
+    redaction_profile: off
+    source_type: product_doc
+    ingest_path: gate
+
+# ---------------------------------------------------------------------------
+# Redaction dictionary
+# ---------------------------------------------------------------------------
+# The curated customer list comes from the CustomerRefs DynamoDB table rather
+# than from this file. That table already exists to gate reference-customer
+# mentions at answer time, so reusing it means the customer list has one
+# owner and one update path. A second list here would drift.
+redaction:
+  dictionary_source: dynamodb
+  dictionary_table: ${CUSTOMER_REFS_TABLE}
+  hmac_secret_arn: ${REDACTION_HMAC_SECRET_ARN}   # Secrets Manager, CMK-encrypted
+  ml_backend: comprehend                          # comprehend | none
+  quarantine_prefix: quarantine/
+  # Emit a CloudWatch metric per quarantined document. Quarantine volume is
+  # the leading indicator that a new source needs dictionary work -- it is
+  # noisy on day one of a new source and should trend to near zero.
+  emit_metrics: true

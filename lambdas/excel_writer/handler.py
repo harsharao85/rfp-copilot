@@ -13,6 +13,7 @@ from boto3.dynamodb.conditions import Key
 from writer import write_output
 from shared.logging_config import bind_job_context, configure_logging
 from shared.models import CellRef, ConfidenceBreakdown, FinalAnswer, Tier
+from shared.provenance import Citation
 
 logger = configure_logging()
 s3 = boto3.client("s3")
@@ -28,6 +29,28 @@ def _d2f(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_d2f(v) for v in obj]
     return obj
+
+
+def _citations(item: dict[str, Any], log: Any) -> list[Citation]:
+    """Rebuild Citation objects written by the hard_rules handler.
+
+    Rows predating the provenance wiring simply have no `citations_detailed`
+    attribute; the writer then falls back to the flat document-id list. A row
+    that has one but cannot be parsed is dropped with a warning rather than
+    failing the whole workbook — one unrenderable source line is not worth
+    losing every answer in the job.
+    """
+    citations: list[Citation] = []
+    for raw in item.get("citations_detailed", []):
+        try:
+            citations.append(Citation(**_d2f(raw)))
+        except Exception as exc:  # noqa: BLE001 — see docstring
+            log.warning(
+                "writer.citation_parse_failed",
+                question_id=item.get("questionId"),
+                error=str(exc),
+            )
+    return citations
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
@@ -59,6 +82,13 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             reviewer_required=bool(item.get("reviewer_required", True)),
             answer_cell=CellRef(**item["answer_cell"]),
             confidence_cell=CellRef(**item["confidence_cell"]),
+            citations_detailed=_citations(item, log),
+            divergence_findings=list(item.get("divergence_findings", [])),
+            divergence_tier_floor=(
+                Tier(item["divergence_tier_floor"])
+                if item.get("divergence_tier_floor")
+                else None
+            ),
         )
         for item in items
         if "answer_text" in item

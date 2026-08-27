@@ -10,6 +10,14 @@ Enforced rules (per v0.4 plan §5.7, §7):
      confirms public_reference=true with unexpired approval.
   4. Forward-looking statements ("will deliver by Q3") → minimum AMBER.
   5. Competitor disparagement → forced RED.
+  6. Retrospective divergence across prior answers → tier floor from the
+     divergence detector's deterministic classification matrix.
+
+Rule 6 note: the floor arrives already decided. The detector asks a model
+exactly one question — do these two statements contradict? — and derives kind
+and severity from a fixed matrix. This engine applies that floor the same way
+it applies the pricing and compliance rules; it does not re-evaluate it, and
+no tier here is ever set by a model's own assessment of its work.
 
 The rule set version is stamped on every audit record so we know
 which policy was in effect when an answer was generated.
@@ -17,11 +25,15 @@ which policy was in effect when an answer was generated.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from shared.models import Tier
 
-RULES_VERSION = "2026-04-14"
+# Bumped 2026-08-27 when rule 6 (divergence tier floor) was added. The version
+# is stamped on every audit record, so an auditor can tell which policy was in
+# force when an answer was tiered.
+RULES_VERSION = "2026-08-27"
 
 # Patterns. Intentionally broad — we'd rather false-positive into
 # SME review than false-negative into a prospect-facing commitment.
@@ -77,8 +89,15 @@ def apply_rules(
     invoked_customers: list[str],
     approved_reference_customers: list[str],
     current_tier: Tier,
+    divergence_tier_floor: Tier | None = None,
+    divergence_kinds: Sequence[str] = (),
 ) -> RuleResult:
-    """Apply hard rules and return the adjusted tier plus triggered rule names."""
+    """Apply hard rules and return the adjusted tier plus triggered rule names.
+
+    `divergence_tier_floor` is `DivergenceReport.tier_floor` — None when the
+    detector found nothing, or did not run. `divergence_kinds` names the kinds
+    behind that floor and only affects trigger labelling.
+    """
     triggers: list[str] = []
     tier = current_tier
 
@@ -113,6 +132,17 @@ def apply_rules(
     if any(p.search(answer_text) for p in FORWARD_LOOKING_PATTERNS):
         tier = _demote(tier, Tier.AMBER)
         triggers.append("forward_looking_statement")
+
+    # Rule 6: Divergence floor. _demote never promotes, so an AMBER floor
+    # cannot lift an answer that pricing already forced to RED.
+    if divergence_tier_floor is not None:
+        tier = _demote(tier, divergence_tier_floor)
+        if divergence_kinds:
+            # dict.fromkeys de-duplicates while keeping detector order, so the
+            # trigger list reads the same way twice for the same report.
+            triggers.extend(f"divergence:{k}" for k in dict.fromkeys(divergence_kinds))
+        else:
+            triggers.append(f"divergence:{divergence_tier_floor.value}")
 
     return RuleResult(
         final_tier=tier,

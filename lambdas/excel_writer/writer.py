@@ -7,7 +7,8 @@ and conditional formatting. Additions:
   - Answer text in answer_cell
   - Confidence score in confidence_cell
   - Cell fill color tied to tier (green/amber/red)
-  - Cell comment on the answer cell listing citations + rule triggers
+  - Cell comment on the answer cell listing divergence findings, citations
+    and rule triggers
   - A new Summary sheet appended at the end
 
 Colors match the v0.4 plan §5.8 convention:
@@ -39,8 +40,33 @@ TIER_COMMENT_PREFIX = {
 }
 
 
+#: Excel renders a comment in a small floating box. Anything past the first
+#: screenful needs a deliberate scroll, so ordering is a design decision:
+#: divergence first (an SME who reads one line should read that one), then the
+#: score, then triggers, then sources.
+_MAX_FINDINGS_SHOWN = 4
+_MAX_SOURCES_SHOWN = 5
+
+#: Roomier than openpyxl's 130x110 default, which clipped the comment to about
+#: two lines once citations were added.
+_COMMENT_WIDTH = 460
+_COMMENT_HEIGHT = 280
+
+
 def _comment_body(ans: FinalAnswer) -> str:
     lines = [TIER_COMMENT_PREFIX[ans.tier]]
+
+    # Divergence leads. It is the only signal here that says a *previously
+    # shipped* answer may be wrong, rather than that this draft needs review.
+    if ans.divergence_findings:
+        lines.append("")
+        lines.append("Divergence across prior answers:")
+        for finding in ans.divergence_findings[:_MAX_FINDINGS_SHOWN]:
+            lines.append(f"  • {finding}")
+        remaining = len(ans.divergence_findings) - _MAX_FINDINGS_SHOWN
+        if remaining > 0:
+            lines.append(f"  … and {remaining} more")
+
     lines.append("")
     lines.append(f"Confidence: {ans.raw_confidence:.2f}")
     b = ans.confidence_breakdown
@@ -50,10 +76,19 @@ def _comment_body(ans: FinalAnswer) -> str:
         lines.append("Hard-rule triggers:")
         for t in ans.hard_rule_triggers:
             lines.append(f"  • {t}")
-    if ans.citations:
+
+    # Sources: a rendered citation line where provenance survived retrieval,
+    # otherwise the bare document id. Falling back per-answer rather than
+    # per-citation keeps the block visually consistent.
+    if ans.citations_detailed:
+        lines.append("")
+        lines.append("Sources:")
+        for citation in ans.citations_detailed[:_MAX_SOURCES_SHOWN]:
+            lines.append(f"  • {citation.render()}")
+    elif ans.citations:
         lines.append("")
         lines.append("Citations:")
-        for cite in ans.citations[:5]:
+        for cite in ans.citations[:_MAX_SOURCES_SHOWN]:
             lines.append(f"  • {cite}")
     return "\n".join(lines)
 
@@ -88,7 +123,12 @@ def write_output(
             answer_cell.value = ans.answer_text
             answer_cell.alignment = Alignment(wrap_text=True, vertical="top")
             answer_cell.fill = TIER_FILLS[tier]
-            answer_cell.comment = Comment(_comment_body(ans), "RFP Copilot")
+            answer_cell.comment = Comment(
+                _comment_body(ans),
+                "RFP Copilot",
+                height=_COMMENT_HEIGHT,
+                width=_COMMENT_WIDTH,
+            )
 
             confidence_cell.value = round(ans.raw_confidence, 2)
             confidence_cell.fill = TIER_FILLS[tier]

@@ -12,6 +12,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from shared.provenance import Citation, Provenance
+
+# `shared.provenance` deliberately imports nothing from this module, so this
+# direction is safe. The reverse — importing `divergence.detector` here — would
+# be circular, which is why divergence findings travel as pre-rendered strings
+# (see FinalAnswer.divergence_findings) rather than as objects.
+
 
 class Tier(str, Enum):
     GREEN = "green"
@@ -47,7 +54,19 @@ class RetrievedPassage(BaseModel):
     excerpt: str
     score: float  # 0..1 normalized Kendra relevance
     uri: str | None = None
-    metadata: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    metadata: dict[str, str | int | float | bool | list[str]] = Field(default_factory=dict)
+    """Raw sidecar attributes as returned by the KB, plus `s3_uri`.
+
+    Widened to allow list values because `Provenance.to_sidecar()` emits
+    `topic_ids` and `evidence_refs` as lists. Reading them back costs nothing —
+    the 2 KB S3 Vectors cap applies to what ingestion *writes* as filterable
+    metadata, not to what retrieval returns.
+    """
+
+    provenance: Provenance | None = None
+    """Hydrated from `metadata` via `Provenance.from_sidecar()` at the retrieval
+    boundary. None when the sidecar is absent or malformed — a bad sidecar
+    degrades citation quality but must never drop the passage."""
 
 
 class DispatchPlan(BaseModel):
@@ -146,3 +165,20 @@ class FinalAnswer(BaseModel):
     reviewer_required: bool
     answer_cell: CellRef
     confidence_cell: CellRef
+
+    citations_detailed: list[Citation] = Field(default_factory=list)
+    """Structured citations for the reviewer comment, capped upstream. The
+    workbook renders these via `render_citation()`; `citations` stays as the
+    flat document_id list every existing consumer already reads."""
+
+    divergence_findings: list[str] = Field(default_factory=list)
+    """One line per finding, already rendered by `DivergenceFinding.render()`.
+
+    Rendered upstream rather than carried as objects for two reasons: a
+    DivergenceFinding holds two complete PriorStatements (full answer text and
+    provenance for each), which is far too heavy for a DynamoDB item and a Step
+    Functions payload; and importing the type here would be circular."""
+
+    divergence_tier_floor: Tier | None = None
+    """Audit trail: the floor hard-rule 6 applied, kept alongside the trigger
+    names so an auditor can see the tier was set deterministically."""

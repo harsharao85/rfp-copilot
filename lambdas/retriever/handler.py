@@ -40,6 +40,7 @@ from boto3.dynamodb.conditions import Attr
 
 from shared.logging_config import bind_job_context, configure_logging
 from shared.models import DispatchPlan, PriorAnswerMatch, Retrieval, RetrievedPassage
+from shared.provenance import Provenance
 
 logger = configure_logging()
 
@@ -157,15 +158,9 @@ def _knowledge_base_retrieve(
     for r in resp.get("retrievalResults", []):
         md = r.get("metadata", {}) or {}
         uri = r.get("location", {}).get("s3Location", {}).get("uri")
-        meta: dict[str, Any] = {}
-        if uri:
-            meta["s3_uri"] = uri
-        if md.get("updated_at"):
-            meta["updated_at"] = md["updated_at"]
-        if md.get("approved_at"):
-            meta["approved_at"] = md["approved_at"]
 
         doc_id = md.get("document_id") or (uri.rsplit("/", 1)[-1] if uri else "unknown")
+        meta = _sidecar_metadata(md, uri)
         passages.append(RetrievedPassage(
             source_system=source_system,  # type: ignore[arg-type]
             document_id=doc_id,
@@ -173,8 +168,66 @@ def _knowledge_base_retrieve(
             score=min(max(float(r.get("score", 0.0)), 0.0), 1.0),
             uri=uri,
             metadata=meta,
+            provenance=_hydrate_provenance(md, document_id=doc_id, source=source),
         ))
     return passages
+
+
+# ---------------------------------------------------------------------------
+# Sidecar -> Provenance hydration
+#
+# Attribution lives in sidecar metadata rather than the embedded chunk body
+# (see shared/provenance.py for why). This is the boundary where it stops
+# being an opaque dict and becomes a typed Provenance the writer can cite.
+# ---------------------------------------------------------------------------
+
+_SIDECAR_SCALARS = (str, int, float, bool)
+
+
+def _sidecar_metadata(md: dict[str, Any], uri: str | None) -> dict[str, Any]:
+    """Carry the whole sidecar through, not a hand-picked three keys.
+
+    Values are filtered to the types RetrievedPassage.metadata declares.
+    Anything else (a nested dict from a hand-edited sidecar) is dropped rather
+    than raising — a malformed attribute must not cost us the passage.
+    """
+    meta: dict[str, Any] = {}
+    for key, value in md.items():
+        keep = isinstance(value, _SIDECAR_SCALARS) or (
+            isinstance(value, list) and all(isinstance(v, str) for v in value)
+        )
+        if keep:
+            meta[key] = value
+    if uri:
+        meta["s3_uri"] = uri
+    return meta
+
+
+def _hydrate_provenance(
+    md: dict[str, Any], *, document_id: str, source: str
+) -> Provenance | None:
+    """Build a Provenance from sidecar attributes, or None if it will not build.
+
+    Fail-soft on purpose. A sidecar written before the provenance schema
+    existed, or carrying an audience value outside the AnswerAudience literal,
+    should degrade the citation to the plain document_id — not drop a passage
+    the answer may depend on.
+    """
+    if not md:
+        return None
+    attrs = dict(md)
+    attrs.setdefault("document_id", document_id)
+    attrs.setdefault("source_id", source)
+    try:
+        return Provenance.from_sidecar(attrs)
+    except Exception as exc:  # noqa: BLE001 — see docstring
+        logger.warning(
+            "retriever.provenance_hydration_failed",
+            document_id=document_id,
+            source=source,
+            error=str(exc),
+        )
+        return None
 
 
 def _mock_api_passages(source: str, text: str, top_k: int = 5) -> list[RetrievedPassage]:
@@ -280,7 +333,11 @@ def _kb_prior_matches(text: str, top_k: int = 3) -> list[PriorAnswerMatch]:
     matches: list[PriorAnswerMatch] = []
     for p in passages:
         md = p.metadata or {}
-        expires_on = md.get("expires_on") or ""
+        # Lexical string comparison, deliberately. Sidecar dates are ISO-8601
+        # strings because that is the only form KB metadata filters compare
+        # correctly; the same property makes this `<` valid without any
+        # numeric coercion. Do not "tidy" either side into a datetime here.
+        expires_on = str(md.get("expires_on") or "")
         if expires_on and expires_on < today:
             continue  # hard-expire at the retrieval boundary
         matches.append(PriorAnswerMatch(
