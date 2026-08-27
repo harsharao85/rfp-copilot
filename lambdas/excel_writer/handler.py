@@ -55,6 +55,49 @@ def _citations(item: dict[str, Any], log: Any) -> list[Citation]:
     return citations
 
 
+def _final_answer(item: dict[str, Any], log: Any) -> FinalAnswer | None:
+    """Rebuild one FinalAnswer from a Questions row, or None if the row is unusable.
+
+    A row reaches here having been written by the hard_rules handler, which
+    writes every attribute. A row written by anything else — the review API's
+    approve path used to upsert a bare {answer_text, sme_edited} row for a
+    questionId that did not exist — is missing raw_confidence, tier and the
+    cell references, and the unguarded construction below raised KeyError.
+
+    That exception surfaced as a Step Functions Catch, which marked the job
+    FAILED *after* the SME had approved it: one malformed row cost the whole
+    workbook, permanently. The approve path no longer creates such a row (see
+    review_api.approve), but the writer runs on whatever is in the table and
+    must not be the thing that fails the job. One unwritable answer is a gap in
+    one cell; a raised exception is thirty-nine lost answers.
+    """
+    try:
+        return FinalAnswer(
+            question_id=item["questionId"],
+            answer_text=item["answer_text"],
+            citations=item.get("citations", []),
+            raw_confidence=float(item["raw_confidence"]),
+            tier=Tier(item["tier"]),
+            confidence_breakdown=ConfidenceBreakdown(**_d2f(item["confidence_breakdown"])),
+            hard_rule_triggers=item.get("hard_rule_triggers", []),
+            reviewer_required=bool(item.get("reviewer_required", True)),
+            answer_cell=CellRef(**item["answer_cell"]),
+            confidence_cell=CellRef(**item["confidence_cell"]),
+            citations_detailed=_citations(item, log),
+            divergence_findings=list(item.get("divergence_findings", [])),
+            divergence_tier_floor=(
+                Tier(item["divergence_tier_floor"]) if item.get("divergence_tier_floor") else None
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — see docstring
+        log.warning(
+            "writer.row_skipped",
+            question_id=item.get("questionId"),
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return None
+
+
 def _tier_counts(answers: list[FinalAnswer]) -> dict[str, int]:
     """green/amber/red totals, so the review queue can show scale before a
     reviewer opens the job."""
@@ -131,27 +174,18 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             break
         query_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
 
-    answers = [
-        FinalAnswer(
-            question_id=item["questionId"],
-            answer_text=item["answer_text"],
-            citations=item.get("citations", []),
-            raw_confidence=float(item["raw_confidence"]),
-            tier=Tier(item["tier"]),
-            confidence_breakdown=ConfidenceBreakdown(**_d2f(item["confidence_breakdown"])),
-            hard_rule_triggers=item.get("hard_rule_triggers", []),
-            reviewer_required=bool(item.get("reviewer_required", True)),
-            answer_cell=CellRef(**item["answer_cell"]),
-            confidence_cell=CellRef(**item["confidence_cell"]),
-            citations_detailed=_citations(item, log),
-            divergence_findings=list(item.get("divergence_findings", [])),
-            divergence_tier_floor=(
-                Tier(item["divergence_tier_floor"]) if item.get("divergence_tier_floor") else None
-            ),
-        )
-        for item in items
-        if "answer_text" in item
-    ]
+    answers: list[FinalAnswer] = []
+    skipped: list[str] = []
+    for item in items:
+        if "answer_text" not in item:
+            continue
+        answer = _final_answer(item, log)
+        if answer is None:
+            skipped.append(str(item.get("questionId", "?")))
+            continue
+        answers.append(answer)
+    if skipped:
+        log.warning("writer.rows_skipped", question_ids=skipped, count=len(skipped))
 
     output_bucket = os.environ["OUTPUT_BUCKET"]
 

@@ -87,6 +87,110 @@ def test_internal_source_without_customer_still_renders() -> None:
     assert "Internal documentation" in line
 
 
+# -- every citation names the document it came from -------------------------
+#
+# Workflow step 4 is "sources quoted against the answers". A product-doc or
+# compliance sidecar carries no customer and no questionnaire, so the citation
+# line used to be the bare literal "Internal documentation", repeated once per
+# source: an SME reading the cell comment could not tell which document backed
+# the answer, or that two bullets were two different documents.
+
+
+def _product_doc() -> Provenance:
+    """The sidecar shape data/corpus-real/product-docs actually ships."""
+    return Provenance(
+        document_id="encryption_at_rest_aes256gcm",
+        source_id="product_docs",
+        audience="internal",
+        topic_ids=["encryption"],
+    )
+
+
+def _compliance(document_id: str, *, expires_in_days: int) -> Provenance:
+    """The sidecar shape data/corpus-real/compliance actually ships."""
+    return Provenance(
+        document_id=document_id,
+        source_id="compliance_store",
+        audience="certification",
+        expires_on=NOW + timedelta(days=expires_in_days),
+    )
+
+
+def test_a_product_doc_citation_names_its_document() -> None:
+    line = render_citation(_product_doc())
+
+    assert "encryption_at_rest_aes256gcm" in line
+    assert line.startswith("Internal documentation")
+
+
+def test_two_product_docs_do_not_render_as_the_same_line() -> None:
+    """The failure an SME actually saw: two bullets, identical text."""
+    first = render_citation(_product_doc())
+    second = render_citation(
+        Provenance(document_id="key_management_byok_hsm", source_id="product_docs")
+    )
+
+    assert first != second
+
+
+def test_a_compliance_citation_names_the_report() -> None:
+    line = render_citation(_compliance("soc2_type2_2026", expires_in_days=365))
+
+    assert "soc2_type2_2026" in line
+    assert line.startswith("Certification evidence")
+    assert "(EXPIRED)" not in line
+
+
+def test_an_expired_compliance_citation_names_the_report_that_expired() -> None:
+    """CAIQ-015/016: "Certification evidence (EXPIRED)" told the SME something
+    was stale without saying which report, which is half a warning."""
+    line = render_citation(_compliance("soc2_type2_2024_expired", expires_in_days=-30))
+
+    assert "soc2_type2_2024_expired" in line
+    assert line.endswith("(EXPIRED)")
+
+
+def test_an_sme_approved_answer_names_its_document_and_keeps_its_approver() -> None:
+    line = render_citation(
+        Provenance(
+            document_id="lfb-f30d354ab6a08d65",
+            source_id="sme_approved_answers",
+            audience="internal",
+            approved_at=NOW - timedelta(days=1),
+            approved_by="r.calloway@echoworx.example",
+        )
+    )
+
+    assert "lfb-f30d354ab6a08d65" in line
+    assert "approved by r.calloway@echoworx.example" in line
+
+
+def test_a_prior_rfp_citation_keeps_the_rich_form_and_not_the_raw_id() -> None:
+    """Regression guard on the fix. Where the sidecar names a customer and a
+    questionnaire, that *is* the document's name and the id would be noise."""
+    line = render_citation(
+        prov(
+            document_id="northwind_mutual_caiq_2026",
+            questionnaire_name="CAIQ v4.0.3",
+            approved_by="l.fontaine@echoworx.example",
+        )
+    )
+
+    assert line.startswith("Prior answer — Acme Financial Corp")
+    assert "CAIQ v4.0.3" in line
+    assert "approved by l.fontaine@echoworx.example" in line
+    assert "northwind_mutual_caiq_2026" not in line
+
+
+def test_a_citation_with_no_document_id_still_renders_its_audience() -> None:
+    """A malformed sidecar costs the document name, never the whole line."""
+    line = render_citation(
+        Provenance(document_id="", source_id="product_docs", audience="internal")
+    )
+
+    assert line == "Internal documentation"
+
+
 # -- sidecar round trip -----------------------------------------------------
 
 

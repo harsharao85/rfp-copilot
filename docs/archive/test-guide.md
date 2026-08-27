@@ -1,5 +1,7 @@
 # RFP Copilot — Test Guide (v0.5)
 
+> **ARCHIVED 2026-08-27 — superseded by `docs/DEPLOY-RUNBOOK.md`.** Written for the sales-side `sample_rfp_acmesec` flow. Every endpoint in it belongs to a deleted AWS account, it instructs the operator to curl a Mock Sources API that no longer exists and to paste API URLs into UI fields that were replaced by a deploy-time `config.js`, and §6b/§7 verify a LibraryFeedback table and a staleness sweep that were both removed in Phase F. Kept for the reasoning, not the steps.
+
 Live environment (us-east-1, account 658203403363):
 
 | Resource | Value |

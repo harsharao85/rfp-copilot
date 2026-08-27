@@ -153,8 +153,11 @@ async function handleFile(file) {
   }
 }
 
+let lastRenderedStatus = null;
+
 function pollStatus(jobId) {
   clearPoll();
+  lastRenderedStatus = null;
   pollTimer = setInterval(async () => {
     try {
       const data = await uploadApiCall(`/upload/${jobId}/status`);
@@ -167,16 +170,31 @@ function pollStatus(jobId) {
   }, 5000);
 }
 
+// WAITING_FOR_REVIEW and FINALIZING are waypoints, not endings. The SME
+// approves in review.html, the final workbook is written, and this page's job
+// reaches SUCCEEDED — but only if it is still polling when that happens.
+// Stopping at WAITING_FOR_REVIEW left the upload page parked forever on
+// "paused for review" while the download was already sitting there.
+// Only SUCCEEDED and FAILED are terminal; everything else keeps the timer.
 function handleStatusTransition(jobId, data) {
   const status = data.status;
+  const changed = status !== lastRenderedStatus;
+  lastRenderedStatus = status;
+
   if (status === 'WAITING_FOR_REVIEW') {
-    clearPoll();
-    setProgress(100, '');
-    const reviewLink = `review.html?job=${encodeURIComponent(jobId)}`;
-    showUploadStatus(
-      `Pipeline paused for review. <a href="${reviewLink}" style="color:#155724;font-weight:600">Open Review UI →</a>`,
-      'ok'
-    );
+    setProgress(90, '');
+    if (changed) {
+      const reviewLink = `review.html?job=${encodeURIComponent(jobId)}`;
+      showUploadStatus(
+        `Pipeline paused for review. <a href="${reviewLink}" style="color:#155724;font-weight:600">Open Review UI →</a>`,
+        'ok'
+      );
+    }
+  } else if (status === 'FINALIZING') {
+    setProgress(95, '');
+    if (changed) {
+      showUploadStatus('Approved. Writing the final workbook…', 'ok');
+    }
   } else if (status === 'SUCCEEDED') {
     clearPoll();
     setProgress(100, '');
@@ -244,7 +262,8 @@ function getJobs() {
 function statusBadge(s) {
   const map = {
     UPLOADING: 's-uploading', PROCESSING: 's-processing',
-    WAITING_FOR_REVIEW: 's-waiting', SUCCEEDED: 's-succeeded', FAILED: 's-failed',
+    WAITING_FOR_REVIEW: 's-waiting', FINALIZING: 's-processing',
+    SUCCEEDED: 's-succeeded', FAILED: 's-failed',
   };
   const cls = map[s] || 's-uploading';
   return `<span class="badge-status ${cls}">${s}</span>`;

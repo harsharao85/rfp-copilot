@@ -542,3 +542,112 @@ def test_a_broken_audit_table_does_not_break_the_pipeline(
 
     assert resp["statusCode"] == 200
     assert aws.job(json.loads(resp["body"])["jobId"])["session_status"] == session.CREATED
+
+
+# ---------------------------------------------------------------------------
+# approve — an unknown questionId is rejected, not upserted
+#
+# DynamoDB UpdateItem upserts. A payload naming a questionId this job does not
+# have used to create a Questions row holding only answer_text and sme_edited:
+# no tier, no raw_confidence, no cell references. The final workbook write then
+# read it back, raised, and the state machine's Catch marked a job the SME had
+# already approved as FAILED — permanently undownloadable.
+# ---------------------------------------------------------------------------
+
+
+def _one_real_question(aws: Any, question_id: str = "q-0001") -> None:
+    aws.ddb.Table(QUESTIONS).put_item(
+        Item={
+            "jobId": "job-1",
+            "questionId": question_id,
+            "text": "Key rotation?",
+            "answer_text": "machine answer",
+        }
+    )
+
+
+def test_approve_rejects_an_unknown_question_id(review: Any, aws: Any) -> None:
+    _awaiting_job(aws)
+    _one_real_question(aws)
+
+    resp = review.approve(
+        "job-1", {"answers": [{"questionId": "CAIQ-038", "answer_text": "poison"}]}
+    )
+
+    assert resp["statusCode"] == 400
+    assert "CAIQ-038" in resp["body"]
+
+
+def test_approve_with_an_unknown_question_id_writes_nothing(review: Any, aws: Any) -> None:
+    """Not the phantom row, not the edits alongside it, not the job transition.
+
+    A refused approval must leave the job exactly as it found it, so the SME
+    can fix the payload and approve again.
+    """
+    _awaiting_job(aws)
+    _one_real_question(aws)
+
+    review.approve(
+        "job-1",
+        {
+            "answers": [
+                {"questionId": "q-0001", "answer_text": "edited"},
+                {"questionId": "CAIQ-038", "answer_text": "poison"},
+            ]
+        },
+    )
+
+    rows = aws.ddb.Table(QUESTIONS).query(
+        KeyConditionExpression=boto3.dynamodb.conditions.Key("jobId").eq("job-1")
+    )["Items"]
+    assert [r["questionId"] for r in rows] == ["q-0001"]
+    assert rows[0]["answer_text"] == "machine answer"
+    assert "sme_edited" not in rows[0]
+
+    job = aws.job("job-1")
+    assert job["review_status"] == "PENDING"
+    assert job["session_status"] == session.AWAITING_REVIEW
+    assert aws.steps("job-1") == []
+
+
+def test_a_refused_approval_does_not_resume_the_state_machine(review: Any, aws: Any) -> None:
+    """SendTaskSuccess is one-shot. Firing it on a payload we then reject would
+    finalize the job around answers that were never written."""
+    _awaiting_job(aws)
+    _one_real_question(aws)
+
+    review.approve("job-1", {"answers": [{"questionId": "nope", "answer_text": "x"}]})
+
+    review.sfn.send_task_success.assert_not_called()
+
+
+def test_approve_rejects_an_answer_with_no_question_id(review: Any, aws: Any) -> None:
+    _awaiting_job(aws)
+
+    resp = review.approve("job-1", {"answers": [{"answer_text": "orphan"}]})
+
+    assert resp["statusCode"] == 400
+    assert aws.job("job-1")["review_status"] == "PENDING"
+
+
+def test_approve_rejects_an_answer_with_no_text(review: Any, aws: Any) -> None:
+    _awaiting_job(aws)
+    _one_real_question(aws)
+
+    resp = review.approve("job-1", {"answers": [{"questionId": "q-0001"}]})
+
+    assert resp["statusCode"] == 400
+    assert aws.job("job-1")["review_status"] == "PENDING"
+
+
+def test_a_known_question_id_still_approves(review: Any, aws: Any) -> None:
+    """The guard must not cost the happy path."""
+    _awaiting_job(aws)
+    _one_real_question(aws)
+
+    resp = review.approve("job-1", {"answers": [{"questionId": "q-0001", "answer_text": "edited"}]})
+
+    assert resp["statusCode"] == 200
+    row = aws.ddb.Table(QUESTIONS).get_item(Key={"jobId": "job-1", "questionId": "q-0001"})["Item"]
+    assert row["answer_text"] == "edited"
+    assert row["sme_edited"] is True

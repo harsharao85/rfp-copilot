@@ -1,5 +1,7 @@
 # RFP Copilot — Live Demo Script
 
+> **ARCHIVED 2026-08-27 — superseded by `docs/DEMO-SCRIPT.md`.** Presents the sales-side `sample_rfp_acmesec` demo: serves the UI from `python3 -m http.server 8080` (the registered Cognito callback is port 8000, and `ui/` ships no `config.js`), tells the presenter to paste API URLs into fields that no longer exist, references `data/sample_rfp.xlsx` (the file is `data/incoming/sample_rfp_acmesec.xlsx`), and Act 4 walks a LibraryFeedback scan and a '⟳ Staleness' button — the table and the button are both gone. Kept for the reasoning, not the steps.
+
 **Duration:** ~10 minutes. Acts 1–2 are the core demo (5 min). Acts 3–4 are the governance deep-dive for technical audiences. Backend verification commands are in `docs/test-guide.md` — this script covers what the audience sees and hears.
 
 ---

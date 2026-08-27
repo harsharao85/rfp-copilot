@@ -299,18 +299,65 @@ def approve(job_id: str, body: dict[str, Any], actor: str | None = None) -> dict
     if job.get("review_status") != "PENDING":
         return _resp(409, {"error": f"job already {job.get('review_status')}"})
 
-    # Persist any edited answers
+    # Persist any edited answers.
+    #
+    # DynamoDB's UpdateItem upserts. Without a condition, a payload naming a
+    # questionId this job does not have created a *new* Questions row holding
+    # nothing but answer_text and sme_edited — no tier, no raw_confidence, no
+    # cell references. The final workbook write then read that row back and
+    # died on the missing attributes, and the Catch marked a job the SME had
+    # already approved as FAILED: permanently undownloadable, from one bad
+    # payload. So: reject the payload, do not write it.
+    #
+    # Two layers, deliberately. The pre-flight scan means a rejected payload
+    # leaves *nothing* half-written even when it names ten valid ids and one
+    # bad one; the condition expression on each write is the real guard,
+    # because a row can disappear between the scan and the update.
     edited = body.get("answers", [])
     answer_map: dict[str, str] = {}
     if edited:
         questions_table = ddb.Table(os.environ["QUESTIONS_TABLE"])
+
         for a in edited:
-            answer_map[a["questionId"]] = a["answer_text"]
-            questions_table.update_item(
-                Key={"jobId": job_id, "questionId": a["questionId"]},
-                UpdateExpression="SET answer_text = :t, sme_edited = :e",
-                ExpressionAttributeValues={":t": a["answer_text"], ":e": True},
+            if not isinstance(a, dict) or not a.get("questionId"):
+                return _resp(400, {"error": "each answer needs a questionId"})
+            if "answer_text" not in a:
+                return _resp(400, {"error": f"answer {a['questionId']} has no answer_text"})
+
+        unknown = [
+            str(a["questionId"])
+            for a in edited
+            if "Item"
+            not in questions_table.get_item(
+                Key={"jobId": job_id, "questionId": str(a["questionId"])},
+                ProjectionExpression="questionId",
             )
+        ]
+        if unknown:
+            logger.warning("review_api.unknown_question_ids", job_id=job_id, ids=unknown)
+            return _resp(
+                400,
+                {"error": "unknown questionId for this job", "questionIds": sorted(unknown)},
+            )
+
+        for a in edited:
+            question_id = str(a["questionId"])
+            try:
+                questions_table.update_item(
+                    Key={"jobId": job_id, "questionId": question_id},
+                    UpdateExpression="SET answer_text = :t, sme_edited = :e",
+                    ConditionExpression=Attr("questionId").exists(),
+                    ExpressionAttributeValues={":t": a["answer_text"], ":e": True},
+                )
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                    raise
+                logger.warning("review_api.unknown_question_ids", job_id=job_id, ids=[question_id])
+                return _resp(
+                    400,
+                    {"error": "unknown questionId for this job", "questionIds": [question_id]},
+                )
+            answer_map[question_id] = a["answer_text"]
 
     now = datetime.now(UTC).isoformat()
     # The verified JWT identity wins over anything the caller put in the body:

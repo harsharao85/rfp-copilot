@@ -1,5 +1,7 @@
 # RFP Copilot — Demo Test Guide
 
+> **ARCHIVED 2026-08-27 — superseded by `docs/DEPLOY-RUNBOOK.md` (verification) and `docs/DEMO-SCRIPT.md` (the run-through).** Same defects as `test-guide.md`: hardcoded endpoints from a deleted account including a Mock Sources API that no longer exists, paste-the-API-URL pre-flight, and a LibraryFeedback / staleness walkthrough for components deleted in Phase F. Kept for the reasoning, not the steps.
+
 Live environment (us-east-1, account 658203403363):
 
 | Resource | Value |

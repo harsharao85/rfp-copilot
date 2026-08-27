@@ -186,22 +186,47 @@ class Citation(BaseModel):
 def render_citation(p: Provenance) -> str:
     """Human-readable source line for the output workbook.
 
-    Leads with the customer and date because that is what an SME scans for.
-    "Prior answer — Acme Financial Corp, Vendor Security Assessment,
-    11 Mar 2026, approved by R. Sandhu (EXPIRED)"
+    Every line names the document it came from. Where the sidecar carries a
+    human identity for that document — a customer and a questionnaire — that
+    identity *is* the name, and the raw id would be noise:
+
+        "Prior answer — Acme Financial Corp, Vendor Security Assessment,
+         11 Mar 2026, approved by R. Sandhu (EXPIRED)"
+
+    Product-doc, compliance and SME-approved sidecars carry no customer and no
+    questionnaire, so the lead used to degrade to a bare literal — "Internal
+    documentation", repeated once per source — which names nothing and makes
+    step 4 of the workflow ("sources quoted against the answers") unusable. In
+    that case the document id follows the lead:
+
+        "Internal documentation — encryption_at_rest_aes256gcm"
+        "Certification evidence — soc2_type2_2024_expired  (EXPIRED)"
+
+    The id is emitted verbatim rather than prettified: it is the key an SME
+    greps for in the corpus bucket, and it is the same token that appears in
+    the flat `citations` list.
     """
     parts: list[str] = []
 
+    # A customer/prospect answer is identified by who it went to; anything else
+    # is identified by its document id.
+    named_by_customer = p.audience in ("customer", "prospect") and bool(p.customer_name)
+
     if p.audience == "customer" and p.customer_name:
-        parts.append(f"Prior answer — {p.customer_name}")
+        lead = f"Prior answer — {p.customer_name}"
     elif p.audience == "prospect" and p.customer_name:
-        parts.append(f"Prospect answer — {p.customer_name}")
+        lead = f"Prospect answer — {p.customer_name}"
     elif p.audience == "certification":
-        parts.append("Certification evidence")
+        lead = "Certification evidence"
     elif p.audience == "public":
-        parts.append("Published (trust portal)")
+        lead = "Published (trust portal)"
     else:
-        parts.append("Internal documentation")
+        lead = "Internal documentation"
+
+    document = (p.document_id or "").strip()
+    if not named_by_customer and document:
+        lead = f"{lead} — {document}"
+    parts.append(lead)
 
     if p.questionnaire_name:
         parts.append(p.questionnaire_name)

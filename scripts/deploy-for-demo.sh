@@ -4,9 +4,21 @@
 # Idempotent: safe to re-run after a failed deployment.
 # Prereqs: node >= 20, python3 >= 3.12, aws CLI v2, Docker Desktop running.
 #
+# The deploy is two passes on purpose. The Cognito callback URLs have to name
+# the CloudFront domain, and that domain does not exist until the static-site
+# stack has been created — while the static site needs the Cognito identifiers
+# for its generated config.js. References both ways is a cycle, so pass 2
+# redeploys only the auth stack with `-c siteUrl=https://<domain>` read from
+# pass 1. Without it the callbacks stay on localhost and every login from
+# CloudFront dies on `redirect_mismatch`.
+#
+# Self sign-up is off, so a fresh account also has nobody who can log in.
+# Pass the first reviewer's email and this script creates them.
+#
 # Usage:
 #   cd rfp-copilot
-#   bash scripts/deploy-for-demo.sh
+#   bash scripts/deploy-for-demo.sh reviewer@example.com
+#   REVIEWER_EMAIL=reviewer@example.com bash scripts/deploy-for-demo.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,7 +26,12 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INFRA="$ROOT/infra"
 # Stage must match the `stage` CDK context the stacks are deployed with.
 STAGE="${STAGE:-poc}"
+export STAGE
 PREFIX="rfp-copilot-$STAGE"
+# First reviewer, as an argument or an env var. Empty means "skip the
+# bootstrap and tell the operator how to run it later" — a deploy is still
+# useful without it, but a login is not possible until someone runs it.
+REVIEWER_EMAIL="${1:-${REVIEWER_EMAIL:-}}"
 
 echo "=== RFP Copilot — Deploy for Demo ==="
 
@@ -56,35 +73,67 @@ npm ci --silent
 echo "─── Bootstrapping CDK (idempotent) ───"
 npx cdk bootstrap "aws://$ACCOUNT/$REGION" 2>&1 | grep -v "^$" || true
 
-# ── Deploy all stacks ─────────────────────────────────────────────────────────
+# ── Deploy, pass 1 of 2 ───────────────────────────────────────────────────────
 echo ""
-echo "─── Deploying all stacks (this takes ~10–15 min on first deploy) ───"
+echo "─── Pass 1/2: deploying all stacks (~10–15 min on first deploy) ───"
 npx cdk deploy --all --require-approval never \
   -c "stage=$STAGE" -c "region=$REGION" \
   --outputs-file "$ROOT/infra/outputs.json"
 
-echo "✓ Deploy complete"
+echo "✓ Pass 1 complete"
 
 # ── Resolve outputs ───────────────────────────────────────────────────────────
 cfn_output() {
   aws cloudformation describe-stacks \
     --stack-name "$1" --region "$REGION" \
     --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" \
-    --output text
+    --output text 2>/dev/null || true
 }
 
-CORPUS_BUCKET=$(cfn_output "$PREFIX-storage" "ReferenceCorpusBucketName")
-INCOMING_BUCKET=$(cfn_output "$PREFIX-storage" "IncomingBucketName")
-CUSTOMER_REFS_TABLE=$(cfn_output "$PREFIX-data" "CustomerRefsTableName")
-REVIEW_API_URL=$(cfn_output "$PREFIX-orchestration" "ReviewApiUrl")
-SM_ARN=$(cfn_output "$PREFIX-orchestration" "StateMachineArn")
-SITE_URL=$(cfn_output "$PREFIX-static-site" "SiteUrl")
+require_output() {
+  local value
+  value=$(cfn_output "$1" "$2")
+  if [ -z "$value" ] || [ "$value" = "None" ]; then
+    echo "ERROR: stack '$1' has no output '$2' — pass 1 did not complete." >&2
+    exit 1
+  fi
+  printf '%s' "$value"
+}
+
+CORPUS_BUCKET=$(require_output "$PREFIX-storage" "ReferenceCorpusBucketName")
+INCOMING_BUCKET=$(require_output "$PREFIX-storage" "IncomingBucketName")
+CUSTOMER_REFS_TABLE=$(require_output "$PREFIX-data" "CustomerRefsTableName")
+REVIEW_API_URL=$(require_output "$PREFIX-orchestration" "ReviewApiUrl")
+SM_ARN=$(require_output "$PREFIX-orchestration" "StateMachineArn")
+SITE_URL=$(require_output "$PREFIX-static-site" "SiteUrl")
+USER_POOL_ID=$(require_output "$PREFIX-auth" "UserPoolId")
+
+# ── Deploy, pass 2 of 2 ───────────────────────────────────────────────────────
+# Only the auth stack reads siteUrl. Re-running this against an already-correct
+# callback list is a no-op deploy, so the whole script stays re-runnable.
+echo ""
+echo "─── Pass 2/2: registering $SITE_URL as a Cognito callback ───"
+cd "$INFRA"
+npx cdk deploy "$PREFIX-auth" --require-approval never \
+  -c "stage=$STAGE" -c "region=$REGION" -c "siteUrl=$SITE_URL"
+echo "✓ Cognito callbacks now point at $SITE_URL"
+
+# ── Bootstrap the first reviewer ──────────────────────────────────────────────
+# Self sign-up is disabled on the pool, so without this nobody can log in.
+echo ""
+echo "─── Reviewer bootstrap ───"
+if [ -n "$REVIEWER_EMAIL" ]; then
+  bash "$SCRIPT_DIR/bootstrap-reviewer.sh" "$USER_POOL_ID" "$REVIEWER_EMAIL" "$REGION"
+else
+  echo "  no reviewer email given — NOBODY CAN LOG IN YET."
+  echo "  Run: bash scripts/bootstrap-reviewer.sh $USER_POOL_ID <email> $REGION"
+fi
 
 # ── Seed reference corpus ──────────────────────────────────────────────────────
 echo ""
 echo "─── Seeding reference corpus into s3://$CORPUS_BUCKET/ ───"
 cd "$ROOT"
-python3 scripts/seed_s3_corpus.py --bucket "$CORPUS_BUCKET"
+python3 scripts/seed_s3_corpus.py --bucket "$CORPUS_BUCKET" --stack-prefix "$PREFIX"
 
 # ── Seed customer references ───────────────────────────────────────────────────
 echo ""
@@ -104,22 +153,29 @@ echo ""
 echo "════════════════════════════════════════════════════════════"
 echo " DEMO READY"
 echo "════════════════════════════════════════════════════════════"
-echo " Site URL:         $SITE_URL"
-echo " API URL:          $REVIEW_API_URL"
-echo " State machine:    $SM_ARN"
+echo " SITE URL (open this): $SITE_URL"
+echo " API URL:              $REVIEW_API_URL"
+echo " State machine:        $SM_ARN"
+echo " Cognito user pool:    $USER_POOL_ID"
+if [ -n "$REVIEWER_EMAIL" ]; then
+  echo " Reviewer:             $REVIEWER_EMAIL (temporary password emailed by Cognito)"
+else
+  echo " Reviewer:             NONE — run scripts/bootstrap-reviewer.sh before demoing"
+fi
 echo ""
 echo " Demo flow:"
-echo "   1. Run the pipeline:"
+echo "   1. Open $SITE_URL and sign in as the reviewer."
+echo "      Endpoints come from the deploy-time config.js — nothing to paste,"
+echo "      and the callback URLs already name this domain (pass 2 above)."
+echo "   2. Upload data/incoming/sample_rfp_acmesec.xlsx, or start the pipeline"
+echo "      against the copy already in S3:"
 echo "      aws stepfunctions start-execution \\"
 echo "        --state-machine-arn '$SM_ARN' \\"
 echo "        --input '{\"bucket\":\"$INCOMING_BUCKET\",\"key\":\"$RFP_KEY\",\"jobId\":\"demo-001\"}'"
-echo ""
-echo "   2. Open $SITE_URL/review.html and sign in."
-echo "      Endpoints come from the deploy-time config.js — nothing to paste."
-echo "      If the Hosted UI answers 'redirect_mismatch', the Cognito callbacks"
-echo "      are still localhost: redeploy $PREFIX-auth with -c siteUrl=$SITE_URL"
-echo "   3. Approve answers — flywheel writes to LibraryFeedback."
-echo "   4. Click ⟳ Staleness to show the daemon flagging stale answers."
+echo "   3. Review the amber/red answers at $SITE_URL/review.html and approve."
+echo "      Approved answers are written to the sme-approved/ corpus and"
+echo "      ingested into the knowledge base, so the next run answers better."
+echo "   4. Download the final workbook from the upload page."
 echo ""
 echo " To reset between demos: bash scripts/reset-demo.sh"
 echo " To tear down:           bash scripts/teardown.sh"

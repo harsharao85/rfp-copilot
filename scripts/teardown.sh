@@ -6,13 +6,24 @@
 #
 # Usage:
 #   bash scripts/teardown.sh
+#   STAGE=dev bash scripts/teardown.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA="$(cd "$SCRIPT_DIR/../infra" && pwd)"
 
+# `cdk destroy` synthesises the app before it destroys anything, so it needs
+# the same context the deploy was given. Without `-c stage=`, a non-default
+# stage synthesises as `rfp-copilot-poc-*` and destroys the wrong stacks — or,
+# more often, nothing at all, while reporting success.
+STAGE="${STAGE:-poc}"
+export STAGE
+PREFIX="rfp-copilot-$STAGE"
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || echo us-east-1)}}"
+
 echo "WARNING: This will destroy all RFP Copilot stacks and delete their data."
-echo "Stacks: StorageStack, DataStack, OrchestrationStack, ObservabilityStack"
+echo "Stage: $STAGE   Region: $REGION"
+echo "Stacks: $PREFIX-{storage,data,knowledge-base,auth,orchestration,observability,static-site}"
 echo ""
 read -r -p "Type 'destroy' to confirm: " CONFIRM
 if [ "$CONFIRM" != "destroy" ]; then
@@ -22,7 +33,7 @@ fi
 echo ""
 echo "─── Destroying all stacks ───"
 cd "$INFRA"
-npx cdk destroy --all --force
+npx cdk destroy --all --force -c "stage=$STAGE" -c "region=$REGION"
 
 echo ""
 echo "✓ All stacks destroyed."

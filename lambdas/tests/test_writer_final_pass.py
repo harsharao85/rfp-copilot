@@ -178,3 +178,88 @@ def test_final_pass_completes_the_session_and_moves_the_download(writer: Any) ->
         KeyConditionExpression=boto3.dynamodb.conditions.Key("jobId").eq("job-1")
     )["Items"]
     assert [r["step"] for r in reviews] == [session.COMPLETE]
+
+
+# ---------------------------------------------------------------------------
+# A malformed Questions row must not cost the whole workbook.
+#
+# review_api.approve used to upsert a row holding only answer_text and
+# sme_edited for a questionId that did not exist. This handler then read it
+# back and raised KeyError on raw_confidence, the state machine's Catch marked
+# the job FAILED, and a questionnaire the SME had already approved could never
+# be downloaded. approve no longer writes such a row; the writer must survive
+# one regardless, because it runs on whatever is in the table.
+# ---------------------------------------------------------------------------
+
+
+def _poison_row(**overrides: Any) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "jobId": "job-1",
+        "questionId": "CAIQ-038",
+        "answer_text": "text with no scoring attributes at all",
+        "sme_edited": True,
+    }
+    item.update(overrides)
+    return item
+
+
+@pytest.mark.parametrize(
+    "poison",
+    [
+        pytest.param(_poison_row(), id="no-scoring-attributes"),
+        pytest.param(
+            _poison_row(raw_confidence=Decimal("0.5"), tier="chartreuse"),
+            id="tier-outside-the-enum",
+        ),
+        pytest.param(
+            _poison_row(
+                raw_confidence=Decimal("0.5"),
+                tier="green",
+                confidence_breakdown={"h": Decimal("0.5")},
+                answer_cell={"sheet": "Questionnaire"},
+            ),
+            id="incomplete-cell-reference",
+        ),
+        pytest.param(
+            _poison_row(raw_confidence="not-a-number", tier="green"),
+            id="unparseable-confidence",
+        ),
+    ],
+)
+def test_final_write_survives_a_malformed_questions_row(
+    writer: Any, poison: dict[str, Any]
+) -> None:
+    writer.ddb.Table(QUESTIONS).put_item(Item=poison)
+
+    result = _invoke(writer, "final")
+
+    # The two well-formed answers are still written, and the job completes.
+    assert result["answerCount"] == 2
+    assert _cell_values(writer, result["outputKey"]) == [SME_ANSWER, MACHINE_ANSWER]
+    job = writer.ddb.Table(JOBS).get_item(Key={"jobId": "job-1"})["Item"]
+    assert job["session_status"] == session.COMPLETE
+    assert job["output_key"] == result["outputKey"]
+
+
+def test_a_malformed_row_is_logged_rather_than_silently_dropped(
+    writer: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logged: list[tuple[str, dict[str, Any]]] = []
+
+    class _Log:
+        def info(self, event: str, **kw: Any) -> None:
+            logged.append((event, kw))
+
+        def warning(self, event: str, **kw: Any) -> None:
+            logged.append((event, kw))
+
+    monkeypatch.setattr(writer.handler, "bind_job_context", lambda *a, **k: _Log())
+    writer.ddb.Table(QUESTIONS).put_item(Item=_poison_row())
+
+    _invoke(writer, "final")
+
+    events = {event for event, _ in logged}
+    assert "writer.row_skipped" in events
+    assert "writer.rows_skipped" in events
+    skipped = next(kw for event, kw in logged if event == "writer.rows_skipped")
+    assert skipped["question_ids"] == ["CAIQ-038"]

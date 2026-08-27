@@ -1,5 +1,7 @@
 # Technical Demo Script — RFP Redlining Copilot
 
+> **ARCHIVED 2026-08-27 — superseded by `docs/DEMO-SCRIPT.md`.** A narrated walkthrough of the v0.5 sales-side system. Its architecture segment states 'No Cognito', which the auth stack landed at `ac32b59` directly contradicts — every route on both HTTP APIs is now behind a Cognito JWT authorizer. Kept for the reasoning, not the steps.
+
 **Audience:** AI architects
 **Length:** 15 minutes
 **Format:** Screen recording + voiceover

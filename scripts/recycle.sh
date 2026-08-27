@@ -11,10 +11,18 @@
 # WARNING: `down` and `recycle` DELETE DATA. Only use against dev/sandbox
 # accounts. Requires confirmation.
 #
+# `up` deploys in two passes. The Cognito callback URLs must name the
+# CloudFront domain, which does not exist until the static-site stack does,
+# while the static site needs the Cognito identifiers for its config.js.
+# Pass 2 redeploys only the auth stack with `-c siteUrl=…` read from pass 1.
+# Without it every login from CloudFront fails with `redirect_mismatch`.
+# `up` also creates the first reviewer, because self sign-up is disabled.
+#
 # Usage:
-#   bash scripts/recycle.sh up
+#   bash scripts/recycle.sh up [reviewer@example.com]
+#   REVIEWER_EMAIL=reviewer@example.com bash scripts/recycle.sh up
 #   bash scripts/recycle.sh down
-#   bash scripts/recycle.sh recycle
+#   bash scripts/recycle.sh recycle [reviewer@example.com]
 #   bash scripts/recycle.sh status
 
 set -euo pipefail
@@ -25,16 +33,21 @@ INFRA="$ROOT/infra"
 # Stage and region follow the operator's environment, not this file. STAGE must
 # match the `stage` CDK context the stacks were deployed with (default: poc).
 STAGE="${STAGE:-poc}"
+export STAGE
 PREFIX="rfp-copilot-$STAGE"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || echo us-east-1)}}"
 
 # Pick the newest available Python (scripts use type hints that need 3.10+).
 PY="$(command -v python3.13 || command -v python3.12 || command -v python3)"
 
+# Deployment order, and the list `status` reports. The auth stack was missing
+# here, so `status` never mentioned Cognito — the one stack a first-time
+# deployer most needs to see the state of.
 STACKS=(
   "$PREFIX-storage"
   "$PREFIX-data"
   "$PREFIX-knowledge-base"
+  "$PREFIX-auth"
   "$PREFIX-orchestration"
   "$PREFIX-observability"
   "$PREFIX-static-site"
@@ -71,8 +84,19 @@ confirm_destructive() {
 
 # ─── up ────────────────────────────────────────────────────────────────────
 
+require_output() {
+  local value
+  value=$(cfn_output "$1" "$2")
+  if [ -z "$value" ] || [ "$value" = "None" ]; then
+    echo "ERROR: stack '$1' has no output '$2' — the deploy did not complete." >&2
+    exit 1
+  fi
+  printf '%s' "$value"
+}
+
 cmd_up() {
   check_prereqs
+  local reviewer_email="${1:-${REVIEWER_EMAIL:-}}"
   local account region
   account=$(aws sts get-caller-identity --query Account --output text)
   log "AWS account $account in $REGION. Python: $PY"
@@ -82,7 +106,7 @@ cmd_up() {
   "$PY" scripts/generate_synthetic_data.py
   "$PY" scripts/generate_corpus_documents.py
 
-  log "Deploying all stacks (10–15 min first time, ~2–3 min for updates)…"
+  log "Pass 1/2: deploying all stacks (10–15 min first time, ~2–3 min for updates)…"
   cd "$INFRA"
   [ -d node_modules ] || npm ci --silent
   npx cdk bootstrap "aws://$account/$REGION" 2>/dev/null || true
@@ -90,26 +114,58 @@ cmd_up() {
     -c "stage=$STAGE" -c "region=$REGION" \
     --outputs-file "$INFRA/outputs.json"
 
+  local site_url user_pool_id
+  site_url=$(require_output "$PREFIX-static-site" "SiteUrl")
+  user_pool_id=$(require_output "$PREFIX-auth" "UserPoolId")
+
+  # Only the auth stack reads siteUrl, and redeploying it with a callback list
+  # that is already correct is a no-op — so `up` stays re-runnable.
+  log "Pass 2/2: registering $site_url as a Cognito callback…"
+  cd "$INFRA"
+  npx cdk deploy "$PREFIX-auth" --require-approval never \
+    -c "stage=$STAGE" -c "region=$REGION" -c "siteUrl=$site_url"
+
+  # Self sign-up is disabled on the pool. Without a reviewer, the deploy is
+  # complete and unusable.
+  if [ -n "$reviewer_email" ]; then
+    log "Bootstrapping reviewer $reviewer_email…"
+    bash "$SCRIPT_DIR/bootstrap-reviewer.sh" "$user_pool_id" "$reviewer_email" "$REGION"
+  else
+    log "No reviewer email given — nobody can log in yet."
+    log "  Run: bash scripts/bootstrap-reviewer.sh $user_pool_id <email> $REGION"
+  fi
+
   log "Seeding CustomerRefs + KB corpus…"
   cd "$ROOT"
   "$PY" scripts/seed_customer_refs.py
-  "$PY" scripts/seed_s3_corpus.py
+  "$PY" scripts/seed_s3_corpus.py --stack-prefix "$PREFIX"
 
-  local upload_api review_api sm_arn
+  local upload_api review_api sm_arn reviewer_line
   upload_api=$(cfn_output "$PREFIX-orchestration" "UploadApiUrl")
   review_api=$(cfn_output "$PREFIX-orchestration" "ReviewApiUrl")
   sm_arn=$(cfn_output "$PREFIX-orchestration" "StateMachineArn")
+  if [ -n "$reviewer_email" ]; then
+    reviewer_line="$reviewer_email (temporary password emailed by Cognito)"
+  else
+    reviewer_line="NONE — run scripts/bootstrap-reviewer.sh before demoing"
+  fi
+  # The site is served from CloudFront, not from disk. Opening ui/upload.html
+  # locally cannot work: auth.js hard-stops without the deploy-generated
+  # config.js, which only exists in the bucket the site stack deploys.
   cat <<EOF
 
 ═══════════════════════════════════════════════════════════
  DEMO READY
 ═══════════════════════════════════════════════════════════
- Upload API:     $upload_api
- Review API:     $review_api
- State machine:  $sm_arn
+ SITE URL (open this): $site_url
+ Upload API:           $upload_api
+ Review API:           $review_api
+ State machine:        $sm_arn
+ Cognito user pool:    $user_pool_id
+ Reviewer:             $reviewer_line
 
- Open ui/upload.html in a browser to submit an RFP.
- Review amber/red answers at ui/review.html.
+ Open $site_url and sign in to submit an RFP.
+ Review amber/red answers at $site_url/review.html.
 ═══════════════════════════════════════════════════════════
 EOF
 }
@@ -178,10 +234,11 @@ cmd_down() {
 # ─── recycle (down + up) ───────────────────────────────────────────────────
 
 cmd_recycle() {
+  local reviewer_email="${1:-${REVIEWER_EMAIL:-}}"
   cmd_down
   log "Waiting 30s for AWS resource propagation before re-deploy…"
   sleep 30
-  cmd_up
+  cmd_up "$reviewer_email"
 }
 
 # ─── status ────────────────────────────────────────────────────────────────
@@ -206,9 +263,9 @@ cmd_status() {
 # ─── dispatch ──────────────────────────────────────────────────────────────
 
 case "${1:-}" in
-  up)       cmd_up ;;
+  up)       cmd_up "${2:-}" ;;
   down)     cmd_down ;;
-  recycle)  cmd_recycle ;;
+  recycle)  cmd_recycle "${2:-}" ;;
   status)   cmd_status ;;
-  *)        echo "Usage: $0 {up|down|recycle|status}" >&2; exit 1 ;;
+  *)        echo "Usage: $0 {up|down|recycle|status} [reviewer@example.com]" >&2; exit 1 ;;
 esac
