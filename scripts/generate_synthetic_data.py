@@ -8,9 +8,10 @@ Produces all artifacts under rfp-copilot/data/:
 - whitepapers/*.md                  (policies, overviews, bridge letters)
 - graph/customers.json              (customer reference approval status)
 - graph/products.json               (product / topic / competency graph seed)
-- corpus/compliance/*.json          (primary source sidecars — compliance_store)
-- corpus/product-docs/*.json        (primary source sidecars — product_docs)
-- corpus/prior-rfps/*.json          (prior RFP answer sidecars — includes 3 stale, 1 fresh)
+- corpus/compliance/*.json          (6 primary source sidecars — compliance_store)
+- corpus/product-docs/*.json        (10 primary source sidecars — product_docs)
+- corpus/prior-rfps/*.json          (6 completed questionnaire extracts, attributed)
+- corpus/sme-approved/*.json        (2 hand-written Q&A pairs — the H signal)
 
 Fully fictitious. No real customer names.
 
@@ -31,6 +32,7 @@ from openpyxl.utils import get_column_letter
 RNG = Random(42)  # deterministic demo
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
+TODAY = datetime.now(timezone.utc).date().isoformat()
 
 # --------------------------------------------------------------------------
 # Incoming RFP: a security questionnaire with ~30 questions of varied shape
@@ -377,56 +379,82 @@ within 72 hours of a confirmed security incident affecting them.
 # Graph seed data
 # --------------------------------------------------------------------------
 
+# Six fictitious Echoworx reference accounts. Every name is invented; any
+# resemblance to a real organisation is coincidental.
+#
+# The asymmetry here is load-bearing for the demo. Hard rule 3 in
+# lambdas/hard_rules/rules.py demotes any answer that names a customer which
+# is not in the approved list the retriever builds from this table
+# (public_reference == True AND approval_expires >= today). Exactly two rows
+# clear that bar, so a questionnaire question naming Northwind Mutual passes
+# the gate and an otherwise identical question naming Helix Reinsurance fires
+# `unapproved_reference:Helix Reinsurance`.
 CUSTOMERS: list[dict[str, object]] = [
     {
-        "customer_id": "cust-001",
-        "name": "Northwind Capital",
-        "industry": "financial_services",
-        "employees": 8500,
-        "contract_size_usd": 450000,
+        "customer_id": "cust-nwm-001",
+        "name": "Northwind Mutual",
+        "industry": "insurance",
+        "employees": 9400,
+        "contract_size_usd": 510000,
         "public_reference": True,
-        "approval_expires": (datetime.now(timezone.utc) + timedelta(days=180)).date().isoformat(),
-        "deployed_products": ["platform", "enterprise_tier"],
+        "approval_expires": (datetime.now(timezone.utc) + timedelta(days=210)).date().isoformat(),
+        "deployed_products": ["encryption_gateway", "enterprise_tier"],
     },
     {
-        "customer_id": "cust-002",
-        "name": "Helix Biomedical",
+        "customer_id": "cust-ctb-002",
+        "name": "Cascadia Trust Bank",
+        "industry": "banking",
+        "employees": 15200,
+        "contract_size_usd": 880000,
+        "public_reference": True,
+        "approval_expires": (datetime.now(timezone.utc) + timedelta(days=365)).date().isoformat(),
+        "deployed_products": ["encryption_gateway", "enterprise_tier", "byok"],
+    },
+    {
+        "customer_id": "cust-mhg-003",
+        "name": "Meridian Health Group",
         "industry": "healthcare",
-        "employees": 3200,
-        "contract_size_usd": 180000,
-        "public_reference": True,
-        "approval_expires": (datetime.now(timezone.utc) + timedelta(days=45)).date().isoformat(),
-        "deployed_products": ["platform"],
-    },
-    {
-        "customer_id": "cust-003",
-        "name": "Aurora Federal Credit Union",
-        "industry": "financial_services",
-        "employees": 5400,
-        "contract_size_usd": 320000,
-        "public_reference": False,  # NDA — cannot be named
+        # Never approved for public naming — the MSA carries a mutual
+        # non-publicity clause.
+        "public_reference": False,
+        "employees": 6100,
+        "contract_size_usd": 295000,
         "approval_expires": None,
-        "deployed_products": ["platform", "enterprise_tier"],
+        "deployed_products": ["encryption_gateway"],
     },
     {
-        "customer_id": "cust-004",
-        "name": "Kestrel Logistics",
-        "industry": "logistics",
-        "employees": 12500,
-        "contract_size_usd": 720000,
-        "public_reference": True,
-        "approval_expires": (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat(),  # EXPIRED
-        "deployed_products": ["platform", "enterprise_tier"],
+        "customer_id": "cust-prd-004",
+        "name": "Province of Rideau - Digital Services",
+        "industry": "government",
+        "employees": 28000,
+        "contract_size_usd": 1450000,
+        # Public-sector procurement rules bar vendor endorsement.
+        "public_reference": False,
+        "approval_expires": None,
+        "deployed_products": ["encryption_gateway", "enterprise_tier", "data_residency_ca"],
     },
     {
-        "customer_id": "cust-005",
-        "name": "Meridian Energy",
-        "industry": "energy",
-        "employees": 22000,
-        "contract_size_usd": 1200000,
-        "public_reference": True,
-        "approval_expires": (datetime.now(timezone.utc) + timedelta(days=320)).date().isoformat(),
-        "deployed_products": ["platform", "enterprise_tier"],
+        "customer_id": "cust-acp-005",
+        "name": "Anvil Capital Partners",
+        "industry": "financial_services",
+        "employees": 2300,
+        "contract_size_usd": 210000,
+        "public_reference": False,
+        "approval_expires": None,
+        "deployed_products": ["encryption_gateway"],
+    },
+    {
+        "customer_id": "cust-hxr-006",
+        "name": "Helix Reinsurance",
+        "industry": "insurance",
+        "employees": 7700,
+        "contract_size_usd": 640000,
+        # Approval LAPSED rather than never granted. Stored as False so the
+        # retriever's boolean filter excludes it either way; the stale date is
+        # kept so a reviewer can see *why* it is excluded.
+        "public_reference": False,
+        "approval_expires": (datetime.now(timezone.utc) - timedelta(days=95)).date().isoformat(),
+        "deployed_products": ["encryption_gateway", "enterprise_tier"],
     },
 ]
 
@@ -474,142 +502,440 @@ def _write_markdown(path: Path, body: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# Reference corpus JSON sidecars — uploaded to S3 by scripts/seed_s3_corpus.py.
-# Primary sources (compliance/ + product-docs/) carry updated_at.
-# Prior-RFP sidecars (prior-rfps/) carry approved_at.
+# Reference corpus JSON sidecars — expanded into real documents by
+# scripts/generate_corpus_documents.py and uploaded by scripts/seed_s3_corpus.py.
 #
-# Staleness demo: three priors were approved BEFORE a corroborating primary
-# source was last updated — they will be suppressed by Rule 1 (freshness
-# suppression) and flagged by the staleness daemon (Rule 4).
-# One prior was approved AFTER all corroborating sources — it stays live.
+#   compliance/    6 docs  source_type=compliance_cert   (updated_at)
+#   product-docs/ 10 docs  source_type=product_doc       (updated_at)
+#   prior-rfps/    6 docs  source_type=prior_rfp         (answered_at + attribution)
+#   sme-approved/  2 docs  source_type=sme_approved_answer (approved_at + expires_on)
+#
+# Every organisation named here is invented.
+#
+# Freshness: `soc2_type2_2024_expired` is deliberately dated ~26 months back
+# with an expires_on already in the past. scorer.score_f() buckets anything
+# older than 730 days at 0.2 (the floor), Provenance.is_expired flips True, and
+# render_citation() suffixes the source line with "(EXPIRED)". It sits directly
+# against `soc2_type2_2026`, which is inside 90 days and therefore scores 1.0.
 # --------------------------------------------------------------------------
 
+_AUD_CERT = "certification"
+_AUD_INTERNAL = "internal"
+_AUD_CUSTOMER = "customer"
+
 CORPUS_PRIMARY: list[dict] = [
-    # compliance/ — authoritative certificates and audit reports
+    # ---- compliance/ (6) ---------------------------------------------------
     {
-        "document_id": "soc2_cert_2025",
-        "title": "SOC 2 Type II Certificate — 2025 Audit",
+        "document_id": "soc2_type2_2026",
+        "title": "SOC 2 Type II Report Summary — FY2026",
         "excerpt": (
-            "SOC 2 Type II audit report covering trust principles Security, Availability, and "
-            "Confidentiality. Audit period: 2024-10-01 to 2025-09-30. Auditor: independent "
-            "third-party CPA firm. No qualified opinions. Next report due Q4 2026."
+            "SOC 2 Type II report covering Security, Availability and Confidentiality. "
+            "Report period 2025-04-01 to 2026-03-31, issued 2026-06-15 by an independent "
+            "CPA firm. No exceptions noted. Covers the email encryption gateway, the "
+            "recipient portal and the tenant administration plane."
         ),
-        "updated_at": "2025-10-01",
-        "topic_ids": ["soc2"],
+        "updated_at": "2026-06-15",
+        "expires_on": "2027-06-15",
+        "audience": _AUD_CERT,
+        "topic_ids": ["soc2", "incident_response"],
         "prefix": "compliance",
     },
     {
-        "document_id": "iso27001_cert_2026",
-        "title": "ISO 27001 Certificate — 2026 Renewal",
+        "document_id": "iso27001_soa_extract_2026",
+        "title": "ISO/IEC 27001:2022 Statement of Applicability — Extract",
         "excerpt": (
-            "ISO 27001:2022 certification. Certificate number: ISMS-2026-00142. "
-            "Certification body: accredited external registrar. Valid through 2029-01-14. "
-            "Scope: design, development, and operation of the SaaS platform."
+            "Extract from Statement of Applicability v6.1 against ISO/IEC 27001:2022 "
+            "Annex A. Certificate ISMS-2026-04417, valid 2026-02-10 to 2029-02-09. "
+            "Includes applicability decisions and justifications for the 93 Annex A controls."
         ),
-        "updated_at": "2026-01-15",
+        "updated_at": "2026-02-10",
+        "expires_on": "2029-02-09",
+        "audience": _AUD_CERT,
         "topic_ids": ["iso27001"],
         "prefix": "compliance",
     },
     {
-        "document_id": "fedramp_status_2026",
-        "title": "FedRAMP Moderate — ATO Assessment Status",
+        "document_id": "iso27018_attestation_2026",
+        "title": "ISO/IEC 27018:2019 Attestation — Public Cloud PII Processing",
         "excerpt": (
-            "FedRAMP Moderate ATO assessment in progress as of 2026-03-01. Third-Party Assessment "
-            "Organization (3PAO) engaged. No committed authorization date. Customers requiring "
-            "FedRAMP Moderate should contact their Account Executive for timeline updates."
+            "Attestation of conformance to ISO/IEC 27018:2019 for the protection of "
+            "personally identifiable information processed in public cloud. Assessed "
+            "alongside the ISO/IEC 27001 surveillance audit, February 2026."
         ),
-        "updated_at": "2026-03-01",
-        "topic_ids": ["fedramp"],
+        "updated_at": "2026-02-10",
+        "expires_on": "2029-02-09",
+        "audience": _AUD_CERT,
+        "topic_ids": ["iso27001", "gdpr", "data_residency"],
         "prefix": "compliance",
     },
-    # product-docs/ — authoritative technical documentation
     {
-        "document_id": "encryption_whitepaper",
-        "title": "Encryption Architecture Whitepaper",
+        "document_id": "pentest_exec_summary_2026",
+        "title": "Independent Penetration Test — Executive Summary (Apr 2026)",
         "excerpt": (
-            "AES-256-GCM encryption at rest. AWS KMS managed keys; BYOK via customer CMK in "
-            "customer's AWS account with key-policy binding. Key rotation: annual by default, "
-            "on-demand via KMS API. TLS 1.2+ in transit with PFS (ECDHE cipher suites), HSTS "
-            "one-year max-age, TLS 1.0/1.1 disabled."
+            "Executive summary of the annual grey-box penetration test of the encryption "
+            "gateway, recipient portal and administration API, conducted 2026-04-06 to "
+            "2026-04-24 by an independent testing firm. Two medium and four low findings; "
+            "all remediated and retested by 2026-04-28."
         ),
-        "updated_at": "2025-09-05",
-        "topic_ids": ["encryption_at_rest", "encryption_in_transit", "key_management"],
+        "updated_at": "2026-04-28",
+        "expires_on": "2027-04-28",
+        "audience": _AUD_CERT,
+        "topic_ids": ["pentest", "sbom"],
+        "prefix": "compliance",
+    },
+    {
+        "document_id": "soc2_type2_2024_expired",
+        "title": "SOC 2 Type II Report Summary — FY2024 (SUPERSEDED)",
+        "excerpt": (
+            "SOC 2 Type II report covering Security and Availability for the period "
+            "2023-04-01 to 2024-03-31, issued 2024-06-30. Superseded by the FY2026 "
+            "report. Retained for audit history only; must not be cited as current "
+            "evidence of the control environment."
+        ),
+        "updated_at": "2024-06-30",
+        "expires_on": "2025-06-30",  # already lapsed — drives the suppression demo
+        "audience": _AUD_CERT,
+        "topic_ids": ["soc2"],
+        "prefix": "compliance",
+    },
+    {
+        "document_id": "dpa_art28_subprocessors_2026",
+        "title": "Data Processing Agreement (GDPR Art. 28) and Sub-processor Register",
+        "excerpt": (
+            "Standard Data Processing Agreement incorporating the 2021 EU Standard "
+            "Contractual Clauses and the UK International Data Transfer Addendum, plus "
+            "the current sub-processor register with processing purpose and location "
+            "for each entry. Register version 2026.05, published 2026-05-20."
+        ),
+        "updated_at": "2026-05-20",
+        "audience": _AUD_CERT,
+        "topic_ids": ["dpa", "gdpr"],
+        "prefix": "compliance",
+    },
+    # ---- product-docs/ (10) ------------------------------------------------
+    {
+        "document_id": "encryption_at_rest_aes256gcm",
+        "title": "Encryption at Rest — AES-256-GCM Envelope Design",
+        "excerpt": (
+            "Message bodies, attachments and metadata at rest are sealed with "
+            "AES-256-GCM under per-message data keys. Data keys are wrapped by a "
+            "tenant key held in a managed key service and are never written to disk "
+            "in the clear."
+        ),
+        "updated_at": "2026-05-04",
+        "audience": _AUD_INTERNAL,
+        "topic_ids": ["encryption_at_rest"],
         "prefix": "product-docs",
     },
     {
-        "document_id": "sso_mfa_guide",
-        "title": "SSO and MFA Integration Guide",
+        "document_id": "encryption_in_transit_tls",
+        "title": "Encryption in Transit — TLS Profile and SMTP Delivery",
         "excerpt": (
-            "SAML 2.0 and OIDC for customer-initiated SSO. OAuth 2.0 Authorization Code + PKCE "
-            "for native integrations. SCIM 2.0 for automated provisioning. MFA factors: TOTP, "
-            "WebAuthn/FIDO2, SMS (not recommended for high-assurance). Hardware keys required "
-            "for admin roles in Enterprise tier."
+            "All external connections negotiate TLS 1.2 or TLS 1.3 with forward-secret "
+            "suites only. TLS 1.0 and 1.1 are refused at every listener. Opportunistic "
+            "SMTP TLS can be raised to enforced TLS with MTA-STS and DANE per partner domain."
         ),
-        "updated_at": "2025-10-20",
-        "topic_ids": ["sso", "mfa", "scim"],
+        "updated_at": "2026-05-04",
+        "audience": _AUD_INTERNAL,
+        "topic_ids": ["encryption_in_transit"],
         "prefix": "product-docs",
     },
     {
-        "document_id": "dr_bcp_overview",
-        "title": "Disaster Recovery and BCP Overview",
+        "document_id": "key_management_byok_hsm",
+        "title": "Key Management — Hierarchy, Rotation, BYOK and HSM Options",
         "excerpt": (
-            "Active-active deployment across two AWS regions. Synchronous replication of critical "
-            "metadata; asynchronous replication < 60 s for bulk data. Target RTO: 4 hours. "
-            "Target RPO: 15 minutes. DR exercises twice annually. Customer SLA: 99.9% monthly "
-            "uptime (Enterprise tier). Backups: daily snapshots retained 90 days."
+            "Three-level key hierarchy: per-message data keys, per-tenant key-encryption "
+            "keys, and a root key. Tenants may supply a customer-managed key (BYOK) or "
+            "hold root key material in a dedicated HSM partition. Default rotation is "
+            "every 365 days with on-demand rotation available to tenant administrators."
         ),
-        "updated_at": "2025-11-10",
+        "updated_at": "2026-06-02",
+        "audience": _AUD_INTERNAL,
+        "topic_ids": ["key_management"],
+        "prefix": "product-docs",
+    },
+    {
+        "document_id": "sso_saml_oidc",
+        "title": "Single Sign-On — SAML 2.0 and OpenID Connect",
+        "excerpt": (
+            "Administrative and end-user sign-in federate through SAML 2.0 or OpenID "
+            "Connect against the tenant's identity provider. Signed assertions are "
+            "mandatory; encrypted assertions are optional. Group claims drive role "
+            "assignment inside the tenant."
+        ),
+        "updated_at": "2026-04-14",
+        "audience": _AUD_INTERNAL,
+        "topic_ids": ["sso"],
+        "prefix": "product-docs",
+    },
+    {
+        "document_id": "mfa_factors_policy",
+        "title": "Multi-Factor Authentication — Supported Factors and Policy",
+        "excerpt": (
+            "Supported second factors are WebAuthn/FIDO2 roaming and platform "
+            "authenticators, TOTP per RFC 6238, and push approval. Tenant policy can "
+            "require a second factor for every sign-in, for administrative roles only, "
+            "or for step-up on sensitive operations."
+        ),
+        "updated_at": "2026-04-14",
+        "audience": _AUD_INTERNAL,
+        "topic_ids": ["mfa"],
+        "prefix": "product-docs",
+    },
+    {
+        "document_id": "scim_provisioning",
+        "title": "SCIM 2.0 User and Group Provisioning",
+        "excerpt": (
+            "A per-tenant SCIM 2.0 endpoint supports create, update, deactivate and "
+            "reactivate for users and create, update and delete for groups. "
+            "Deactivation takes effect immediately: live sessions end and issued tokens "
+            "stop working."
+        ),
+        "updated_at": "2026-04-14",
+        "audience": _AUD_INTERNAL,
+        "topic_ids": ["scim"],
+        "prefix": "product-docs",
+    },
+    {
+        "document_id": "dr_bcp_rto_rpo",
+        "title": "Disaster Recovery and Business Continuity — RTO and RPO",
+        "excerpt": (
+            "Active-active across two regions per residency zone. Published objectives: "
+            "RTO 2 hours and RPO 5 minutes for the gateway, RTO 4 hours and RPO 15 "
+            "minutes for the recipient portal. Service commitment is 99.95% monthly "
+            "uptime on the Enterprise plan."
+        ),
+        "updated_at": "2026-03-19",
+        "audience": _AUD_INTERNAL,
         "topic_ids": ["dr_bcp"],
+        "prefix": "product-docs",
+    },
+    {
+        "document_id": "ssdlc_secure_development",
+        "title": "Secure Development Lifecycle — Design, Build and Release Controls",
+        "excerpt": (
+            "Every change carries a peer code review, static analysis, dependency "
+            "composition analysis and container image scanning before it may merge. "
+            "Threat models are produced per service and revisited when the trust "
+            "boundary moves."
+        ),
+        "updated_at": "2026-06-22",
+        "audience": _AUD_INTERNAL,
+        "topic_ids": ["ssdlc"],
+        "prefix": "product-docs",
+    },
+    {
+        "document_id": "sbom_policy",
+        "title": "Software Bill of Materials — Generation and Disclosure Policy",
+        "excerpt": (
+            "A CycloneDX 1.5 SBOM is generated for every deployable artifact at build "
+            "time, signed, and retained for the supported life of the release. "
+            "Customer-facing SBOMs are available on request under the mutual "
+            "non-disclosure agreement."
+        ),
+        "updated_at": "2026-06-22",
+        "audience": _AUD_INTERNAL,
+        "topic_ids": ["sbom"],
+        "prefix": "product-docs",
+    },
+    {
+        "document_id": "data_residency_matrix",
+        "title": "Data Residency Matrix — Regions, Pinning and Cross-Border Transfer",
+        "excerpt": (
+            "Residency zones: Canada, United States, European Union, United Kingdom, "
+            "and Australia. A tenant is pinned to one zone at provisioning. Message "
+            "bodies, attachments, keys and derived indexes stay inside the elected zone; "
+            "cross-zone transfer happens only where the tenant explicitly enables it."
+        ),
+        "updated_at": "2026-07-08",
+        "audience": _AUD_INTERNAL,
+        "topic_ids": ["data_residency", "gdpr"],
         "prefix": "product-docs",
     },
 ]
 
-# Three intentionally stale priors (approved_at < corroborating primary's updated_at).
-# One fresh prior (approved_at > all corroborating sources).
+# --------------------------------------------------------------------------
+# prior-rfps/ — completed questionnaire extracts, attributed to the six
+# fictitious accounts in CUSTOMERS. Attribution lives in the sidecar rather
+# than the prose (see lambdas/shared/provenance.py): the customer name is
+# citable and groupable without steering retrieval.
+#
+# Two of these six accounts are approved public references. The other four are
+# not, which is what makes hard rule 3 observable rather than theoretical.
+# --------------------------------------------------------------------------
+
 CORPUS_PRIOR_RFPS: list[dict] = [
     {
-        "document_id": "acme_financial_soc2_answer",
-        "title": "Prior answer — Acme Financial: SOC 2 scope (STALE — cert updated after approval)",
+        "document_id": "northwind_mutual_caiq_2026",
+        "title": "Completed CAIQ extract — Northwind Mutual (encryption and key handling)",
         "excerpt": (
-            "SOC 2 Type II audit covers Security, Availability, and Confidentiality trust "
-            "principles. Most recent audit period ended June 2025. Report available under NDA."
+            "CAIQ v4.0.3 responses covering EKM-01 through EKM-04. Message bodies at "
+            "rest are sealed with AES-256-GCM under per-message data keys wrapped by a "
+            "tenant key-encryption key. Rotation runs on a 365-day cycle by default."
         ),
-        "approved_at": "2025-07-01",  # STALE: soc2_cert_2025 updated 2025-10-01
-        "corroborated_by": ["compliance/soc2_cert_2025.json"],
-        "topic_ids": ["soc2"],
-    },
-    {
-        "document_id": "bluebird_encryption_answer",
-        "title": "Prior answer — Bluebird Insurance: encryption at rest (STALE — whitepaper updated)",
-        "excerpt": (
-            "Customer data encrypted at rest using AES-256-GCM. Key management via AWS KMS. "
-            "Enterprise BYOK available via CMK. Key rotation enabled."
-        ),
-        "approved_at": "2025-08-15",  # STALE: encryption_whitepaper updated 2025-09-05
-        "corroborated_by": ["product-docs/encryption_whitepaper.json"],
+        "customer_name": "Northwind Mutual",
+        "customer_id": "cust-nwm-001",
+        "questionnaire_id": "caiq-v4-nwm-2026",
+        "questionnaire_name": "CAIQ v4.0.3",
+        "answered_at": "2026-05-12",
+        "approved_at": "2026-05-12",
+        "approved_by": "r.calloway@echoworx.example",
+        "audience": _AUD_CUSTOMER,
         "topic_ids": ["encryption_at_rest", "key_management"],
     },
     {
-        "document_id": "globex_fedramp_answer",
-        "title": "Prior answer — Globex: FedRAMP status (STALE — status doc updated after approval)",
+        "document_id": "cascadia_trust_caiq_2026",
+        "title": "Completed CAIQ extract — Cascadia Trust Bank (identity and access)",
         "excerpt": (
-            "FedRAMP Moderate ATO assessment is in progress. Third-party assessment organization "
-            "has been engaged. No committed timeline for authorization."
+            "CAIQ v4.0.3 responses covering IAM-01 through IAM-14. SAML 2.0 and OpenID "
+            "Connect federation, WebAuthn and TOTP second factors, and SCIM 2.0 "
+            "lifecycle provisioning with immediate deactivation."
         ),
-        "approved_at": "2026-02-01",  # STALE: fedramp_status_2026 updated 2026-03-01
-        "corroborated_by": ["compliance/fedramp_status_2026.json"],
-        "topic_ids": ["fedramp"],
+        "customer_name": "Cascadia Trust Bank",
+        "customer_id": "cust-ctb-002",
+        "questionnaire_id": "caiq-v4-ctb-2026",
+        "questionnaire_name": "CAIQ v4.0.3",
+        "answered_at": "2026-04-02",
+        "approved_at": "2026-04-02",
+        "approved_by": "d.mensah@echoworx.example",
+        "audience": _AUD_CUSTOMER,
+        "topic_ids": ["sso", "mfa", "scim"],
     },
     {
-        "document_id": "northwind_sso_answer",
-        "title": "Prior answer — Northwind Capital: SSO protocols (FRESH — approved after source)",
+        "document_id": "meridian_health_caiq_2026",
+        "title": "Completed CAIQ extract — Meridian Health Group (privacy and processing)",
         "excerpt": (
-            "SAML 2.0 and OIDC supported for customer-initiated SSO. SCIM 2.0 for automated "
-            "user provisioning. OAuth 2.0 Authorization Code + PKCE for native integrations."
+            "CAIQ v4.0.3 responses covering DSP-01 through DSP-19. Standard Data "
+            "Processing Agreement with the 2021 EU Standard Contractual Clauses, a "
+            "published sub-processor register, and thirty days' notice before any "
+            "sub-processor change takes effect."
         ),
-        "approved_at": "2026-01-15",  # FRESH: sso_mfa_guide updated 2025-10-20 (prior is newer)
-        "corroborated_by": ["product-docs/sso_mfa_guide.json"],
-        "topic_ids": ["sso", "scim"],
+        "customer_name": "Meridian Health Group",
+        "customer_id": "cust-mhg-003",
+        "questionnaire_id": "caiq-v4-mhg-2026",
+        "questionnaire_name": "CAIQ v4.0.3",
+        "answered_at": "2026-02-18",
+        "approved_at": "2026-02-18",
+        "approved_by": "s.okonkwo@echoworx.example",
+        "audience": _AUD_CUSTOMER,
+        "topic_ids": ["dpa", "gdpr", "data_residency"],
+    },
+    {
+        "document_id": "rideau_digital_caiq_2026",
+        "title": "Completed CAIQ extract — Province of Rideau, Digital Services (residency)",
+        "excerpt": (
+            "CAIQ v4.0.3 responses covering DCS-01 through DCS-09. Tenant pinned to the "
+            "Canadian residency zone; message bodies, attachments, key material and "
+            "derived indexes remain in Canada. Support access from outside Canada "
+            "requires a named approval per session."
+        ),
+        "customer_name": "Province of Rideau - Digital Services",
+        "customer_id": "cust-prd-004",
+        "questionnaire_id": "caiq-v4-prd-2026",
+        "questionnaire_name": "CAIQ v4.0.3",
+        "answered_at": "2026-01-27",
+        "approved_at": "2026-01-27",
+        "approved_by": "s.okonkwo@echoworx.example",
+        "audience": _AUD_CUSTOMER,
+        "topic_ids": ["data_residency", "iso27001"],
+    },
+    {
+        "document_id": "anvil_capital_caiq_2025",
+        "title": "Completed CAIQ extract — Anvil Capital Partners (resilience and response)",
+        "excerpt": (
+            "CAIQ v4.0.3 responses covering BCR-01 through BCR-11 and SEF-01 through "
+            "SEF-08. Active-active regional topology, twice-yearly recovery exercises, "
+            "and confirmed-incident notification to affected tenants within 72 hours."
+        ),
+        "customer_name": "Anvil Capital Partners",
+        "customer_id": "cust-acp-005",
+        "questionnaire_id": "caiq-v4-acp-2025",
+        "questionnaire_name": "CAIQ v4.0.3",
+        "answered_at": "2025-11-06",
+        "approved_at": "2025-11-06",
+        "approved_by": "l.fontaine@echoworx.example",
+        "audience": _AUD_CUSTOMER,
+        "topic_ids": ["dr_bcp", "incident_response"],
+    },
+    {
+        "document_id": "helix_reinsurance_caiq_2025",
+        "title": "Completed CAIQ extract — Helix Reinsurance (assurance and supply chain)",
+        "excerpt": (
+            "CAIQ v4.0.3 responses covering A&A-01 through A&A-06 and STA-01 through "
+            "STA-14. SOC 2 Type II and ISO/IEC 27001 evidence, annual independent "
+            "penetration testing, and a signed CycloneDX software bill of materials per "
+            "deployable artifact."
+        ),
+        "customer_name": "Helix Reinsurance",
+        "customer_id": "cust-hxr-006",
+        "questionnaire_id": "caiq-v4-hxr-2025",
+        "questionnaire_name": "CAIQ v4.0.3",
+        "answered_at": "2025-09-22",
+        "approved_at": "2025-09-22",
+        "approved_by": "l.fontaine@echoworx.example",
+        "audience": _AUD_CUSTOMER,
+        "topic_ids": ["soc2", "pentest", "sbom"],
+    },
+]
+
+# --------------------------------------------------------------------------
+# sme-approved/ — hand-written Q&A. This is the only source that feeds the H
+# signal (scorer.score_h), and the retriever only queries it for the
+# `unclassified` class, so these two pairs deliberately sit on the long-tail
+# topics at the bottom of the fixture rather than on anything an authoritative
+# primary already covers.
+#
+# Question 38 (unified endpoint management) is deliberately NOT covered here.
+# It is the question the SME answers on camera, and the follow-up workbook
+# re-asks it verbatim once that answer has been ingested.
+# --------------------------------------------------------------------------
+
+CORPUS_SME_APPROVED: list[dict] = [
+    {
+        "document_id": "sme-echoworx-0001",
+        "question_text": (
+            "Can recipients open encrypted messages using a third-party secure email "
+            "gateway from another vendor, without enrolling in our recipient portal?"
+        ),
+        "answer_text": (
+            "Yes. Where the recipient's organisation operates its own secure email "
+            "gateway, delivery is negotiated gateway-to-gateway over enforced TLS with "
+            "MTA-STS, and the message is delivered into the recipient's ordinary "
+            "mailbox with no enrolment step and no portal account. S/MIME and OpenPGP "
+            "delivery are also available where the recipient publishes a usable "
+            "certificate or key. The recipient portal is the fallback for recipients "
+            "whose organisation offers no interoperable path, not the default. "
+            "Interoperability with another vendor's gateway is a delivery-policy "
+            "setting per partner domain, configured by the tenant administrator."
+        ),
+        "topic_ids": [],
+        "approved_by": "r.calloway@echoworx.example",
+        "approved_at": "2026-07-14",
+        "expires_on": "2027-07-14",
+        "corroborated_by": ["encryption_in_transit_tls"],
+    },
+    {
+        "document_id": "sme-echoworx-0002",
+        "question_text": (
+            "What administrative and delivery event records can a tenant export to its "
+            "own SIEM, and in what format?"
+        ),
+        "answer_text": (
+            "Tenant administrators can export three event streams: administrative "
+            "actions in the tenant plane, message delivery and disposition events, and "
+            "recipient authentication events. Records are emitted as newline-delimited "
+            "JSON conforming to a published schema, and can be pulled from a "
+            "per-tenant export endpoint or pushed to a customer-owned object store "
+            "bucket on a five-minute cadence. Field-level documentation and a mapping "
+            "to the Elastic Common Schema are supplied so the stream can be onboarded "
+            "into a customer SIEM without bespoke parsing. Records are retained in the "
+            "platform for 400 days independently of what the tenant exports."
+        ),
+        "topic_ids": [],
+        "approved_by": "d.mensah@echoworx.example",
+        "approved_at": "2026-07-14",
+        "expires_on": "2027-07-14",
+        "corroborated_by": ["scim_provisioning"],
     },
 ]
 
@@ -658,20 +984,41 @@ def main() -> None:
     print(f"  ✓ graph/customers.json ({len(CUSTOMERS)} customers)")
     print("  ✓ graph/products_and_topics.json")
 
-    # Reference corpus sidecars — primary sources
+    # Reference corpus sidecars. The corpus is authored as a fixed set, so the
+    # target directories are cleared first — a stale document left behind from
+    # an earlier corpus would still be uploaded by seed_s3_corpus.py and would
+    # break the per-prefix counts that scripts/verify_fixture.py asserts.
+    for prefix in ("compliance", "product-docs", "prior-rfps", "sme-approved"):
+        for stale in (DATA / "corpus" / prefix).glob("*.json"):
+            stale.unlink()
+
+    # Primary sources — compliance/ and product-docs/
+    per_prefix: dict[str, int] = {}
     for doc in CORPUS_PRIMARY:
-        prefix = doc["prefix"]
+        prefix = str(doc["prefix"])
         doc_id = doc["document_id"]
         payload = {k: v for k, v in doc.items() if k != "prefix"}
         _write_json(DATA / "corpus" / prefix / f"{doc_id}.json", payload)
-    print(f"  ✓ corpus/compliance/ + corpus/product-docs/ ({len(CORPUS_PRIMARY)} primary sidecars)")
+        per_prefix[prefix] = per_prefix.get(prefix, 0) + 1
+    print(f"  ✓ corpus/compliance/ ({per_prefix.get('compliance', 0)} sidecars)")
+    print(f"  ✓ corpus/product-docs/ ({per_prefix.get('product-docs', 0)} sidecars)")
 
-    # Reference corpus sidecars — prior RFPs (3 stale, 1 fresh for staleness demo)
+    # Prior questionnaires — attribution carried in the sidecar, not the prose.
     for doc in CORPUS_PRIOR_RFPS:
         _write_json(DATA / "corpus" / "prior-rfps" / f"{doc['document_id']}.json", doc)
-    stale_count = sum(1 for d in CORPUS_PRIOR_RFPS if "STALE" in d["title"])
-    fresh_count = len(CORPUS_PRIOR_RFPS) - stale_count
-    print(f"  ✓ corpus/prior-rfps/ ({stale_count} stale, {fresh_count} fresh — staleness demo ready)")
+    print(f"  ✓ corpus/prior-rfps/ ({len(CORPUS_PRIOR_RFPS)} completed questionnaire extracts)")
+
+    # SME-approved Q&A — the only source of the H signal.
+    for doc in CORPUS_SME_APPROVED:
+        _write_json(DATA / "corpus" / "sme-approved" / f"{doc['document_id']}.json", doc)
+    print(f"  ✓ corpus/sme-approved/ ({len(CORPUS_SME_APPROVED)} hand-written Q&A pairs)")
+
+    expired = [d for d in CORPUS_PRIMARY if str(d.get("expires_on", "9999")) < TODAY]
+    for doc in expired:
+        print(
+            f"  ! corpus/compliance/{doc['document_id']} is intentionally EXPIRED "
+            f"(updated_at={doc['updated_at']}, expires_on={doc['expires_on']})"
+        )
 
     print("Done.")
 

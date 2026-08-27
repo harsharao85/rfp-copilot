@@ -23,14 +23,18 @@ cfn_output() {
     --output text
 }
 
+# Stage must match the `stage` CDK context the stacks were deployed with.
+STAGE="${STAGE:-poc}"
+PREFIX="rfp-copilot-$STAGE"
+
 echo "Resolving stack outputs…"
-CORPUS_BUCKET=$(cfn_output "rfp-copilot-dev-storage" "ReferenceCorpusBucketName")
-INCOMING_BUCKET=$(cfn_output "rfp-copilot-dev-storage" "IncomingBucketName")
-JOBS_TABLE=$(cfn_output "rfp-copilot-dev-data" "JobsTableName")
-QUESTIONS_TABLE=$(cfn_output "rfp-copilot-dev-data" "QuestionsTableName")
-REVIEWS_TABLE=$(cfn_output "rfp-copilot-dev-data" "ReviewsTableName")
-LF_TABLE=$(cfn_output "rfp-copilot-dev-data" "LibraryFeedbackTableName")
-CUSTOMER_REFS_TABLE=$(cfn_output "rfp-copilot-dev-data" "CustomerRefsTableName")
+CORPUS_BUCKET=$(cfn_output "$PREFIX-storage" "ReferenceCorpusBucketName")
+INCOMING_BUCKET=$(cfn_output "$PREFIX-storage" "IncomingBucketName")
+JOBS_TABLE=$(cfn_output "$PREFIX-data" "JobsTableName")
+QUESTIONS_TABLE=$(cfn_output "$PREFIX-data" "QuestionsTableName")
+REVIEWS_TABLE=$(cfn_output "$PREFIX-data" "ReviewsTableName")
+LF_TABLE=$(cfn_output "$PREFIX-data" "LibraryFeedbackTableName")
+CUSTOMER_REFS_TABLE=$(cfn_output "$PREFIX-data" "CustomerRefsTableName")
 echo "✓ Outputs resolved"
 
 # ── Regenerate synthetic data ──────────────────────────────────────────────
@@ -99,7 +103,7 @@ echo ""
 echo "════════════════════════════════════════════════════════════"
 echo " Reset complete in ${ELAPSED}s"
 echo "════════════════════════════════════════════════════════════"
-SM_ARN=$(cfn_output "rfp-copilot-dev-orchestration" "StateMachineArn")
+SM_ARN=$(cfn_output "$PREFIX-orchestration" "StateMachineArn")
 echo ""
 echo " Start a fresh demo run:"
 echo "   aws stepfunctions start-execution \\"

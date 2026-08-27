@@ -1,0 +1,10 @@
+{
+  "document_id": "key_management_byok_hsm",
+  "title": "Key Management \u2014 Hierarchy, Rotation, BYOK and HSM Options",
+  "excerpt": "Three-level key hierarchy: per-message data keys, per-tenant key-encryption keys, and a root key. Tenants may supply a customer-managed key (BYOK) or hold root key material in a dedicated HSM partition. Default rotation is every 365 days with on-demand rotation available to tenant administrators.",
+  "updated_at": "2026-06-02",
+  "audience": "internal",
+  "topic_ids": [
+    "key_management"
+  ]
+}

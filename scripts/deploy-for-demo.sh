@@ -12,6 +12,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INFRA="$ROOT/infra"
+# Stage must match the `stage` CDK context the stacks are deployed with.
+STAGE="${STAGE:-poc}"
+PREFIX="rfp-copilot-$STAGE"
 
 echo "=== RFP Copilot — Deploy for Demo ==="
 
@@ -35,7 +38,7 @@ echo "✓ Prereqs OK (node $(node --version), $(python3 --version), $(aws --vers
 
 # ── AWS identity ─────────────────────────────────────────────────────────────
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-REGION=$(aws configure get region || echo "us-east-1")
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || echo "us-east-1")}}"
 echo "✓ AWS account: $ACCOUNT  region: $REGION"
 
 # ── Generate synthetic data ───────────────────────────────────────────────────
@@ -56,24 +59,26 @@ npx cdk bootstrap "aws://$ACCOUNT/$REGION" 2>&1 | grep -v "^$" || true
 # ── Deploy all stacks ─────────────────────────────────────────────────────────
 echo ""
 echo "─── Deploying all stacks (this takes ~10–15 min on first deploy) ───"
-npx cdk deploy --all --require-approval never --outputs-file "$ROOT/infra/outputs.json"
+npx cdk deploy --all --require-approval never \
+  -c "stage=$STAGE" -c "region=$REGION" \
+  --outputs-file "$ROOT/infra/outputs.json"
 
 echo "✓ Deploy complete"
 
 # ── Resolve outputs ───────────────────────────────────────────────────────────
 cfn_output() {
   aws cloudformation describe-stacks \
-    --stack-name "$1" \
+    --stack-name "$1" --region "$REGION" \
     --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" \
     --output text
 }
 
-CORPUS_BUCKET=$(cfn_output "rfp-copilot-dev-storage" "ReferenceCorpusBucketName")
-INCOMING_BUCKET=$(cfn_output "rfp-copilot-dev-storage" "IncomingBucketName")
-CUSTOMER_REFS_TABLE=$(cfn_output "rfp-copilot-dev-data" "CustomerRefsTableName")
-REVIEW_API_URL=$(cfn_output "rfp-copilot-dev-orchestration" "ReviewApiUrl")
-MOCK_API_URL=$(cfn_output "rfp-copilot-dev-orchestration" "MockSourcesApiUrl")
-SM_ARN=$(cfn_output "rfp-copilot-dev-orchestration" "StateMachineArn")
+CORPUS_BUCKET=$(cfn_output "$PREFIX-storage" "ReferenceCorpusBucketName")
+INCOMING_BUCKET=$(cfn_output "$PREFIX-storage" "IncomingBucketName")
+CUSTOMER_REFS_TABLE=$(cfn_output "$PREFIX-data" "CustomerRefsTableName")
+REVIEW_API_URL=$(cfn_output "$PREFIX-orchestration" "ReviewApiUrl")
+SM_ARN=$(cfn_output "$PREFIX-orchestration" "StateMachineArn")
+SITE_URL=$(cfn_output "$PREFIX-static-site" "SiteUrl")
 
 # ── Seed reference corpus ──────────────────────────────────────────────────────
 echo ""
@@ -99,9 +104,8 @@ echo ""
 echo "════════════════════════════════════════════════════════════"
 echo " DEMO READY"
 echo "════════════════════════════════════════════════════════════"
-echo " Review UI:        open ui/review.html in your browser"
+echo " Site URL:         $SITE_URL"
 echo " API URL:          $REVIEW_API_URL"
-echo " Mock sources URL: $MOCK_API_URL"
 echo " State machine:    $SM_ARN"
 echo ""
 echo " Demo flow:"

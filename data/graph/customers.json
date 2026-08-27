@@ -1,65 +1,79 @@
 [
   {
-    "customer_id": "cust-001",
-    "name": "Northwind Capital",
-    "industry": "financial_services",
-    "employees": 8500,
-    "contract_size_usd": 450000,
+    "customer_id": "cust-nwm-001",
+    "name": "Northwind Mutual",
+    "industry": "insurance",
+    "employees": 9400,
+    "contract_size_usd": 510000,
     "public_reference": true,
-    "approval_expires": "2026-10-13",
+    "approval_expires": "2027-03-25",
     "deployed_products": [
-      "platform",
+      "encryption_gateway",
       "enterprise_tier"
     ]
   },
   {
-    "customer_id": "cust-002",
-    "name": "Helix Biomedical",
-    "industry": "healthcare",
-    "employees": 3200,
-    "contract_size_usd": 180000,
+    "customer_id": "cust-ctb-002",
+    "name": "Cascadia Trust Bank",
+    "industry": "banking",
+    "employees": 15200,
+    "contract_size_usd": 880000,
     "public_reference": true,
-    "approval_expires": "2026-05-31",
+    "approval_expires": "2027-08-27",
     "deployed_products": [
-      "platform"
+      "encryption_gateway",
+      "enterprise_tier",
+      "byok"
     ]
   },
   {
-    "customer_id": "cust-003",
-    "name": "Aurora Federal Credit Union",
-    "industry": "financial_services",
-    "employees": 5400,
-    "contract_size_usd": 320000,
+    "customer_id": "cust-mhg-003",
+    "name": "Meridian Health Group",
+    "industry": "healthcare",
+    "public_reference": false,
+    "employees": 6100,
+    "contract_size_usd": 295000,
+    "approval_expires": null,
+    "deployed_products": [
+      "encryption_gateway"
+    ]
+  },
+  {
+    "customer_id": "cust-prd-004",
+    "name": "Province of Rideau - Digital Services",
+    "industry": "government",
+    "employees": 28000,
+    "contract_size_usd": 1450000,
     "public_reference": false,
     "approval_expires": null,
     "deployed_products": [
-      "platform",
-      "enterprise_tier"
+      "encryption_gateway",
+      "enterprise_tier",
+      "data_residency_ca"
     ]
   },
   {
-    "customer_id": "cust-004",
-    "name": "Kestrel Logistics",
-    "industry": "logistics",
-    "employees": 12500,
-    "contract_size_usd": 720000,
-    "public_reference": true,
-    "approval_expires": "2026-03-17",
+    "customer_id": "cust-acp-005",
+    "name": "Anvil Capital Partners",
+    "industry": "financial_services",
+    "employees": 2300,
+    "contract_size_usd": 210000,
+    "public_reference": false,
+    "approval_expires": null,
     "deployed_products": [
-      "platform",
-      "enterprise_tier"
+      "encryption_gateway"
     ]
   },
   {
-    "customer_id": "cust-005",
-    "name": "Meridian Energy",
-    "industry": "energy",
-    "employees": 22000,
-    "contract_size_usd": 1200000,
-    "public_reference": true,
-    "approval_expires": "2027-03-02",
+    "customer_id": "cust-hxr-006",
+    "name": "Helix Reinsurance",
+    "industry": "insurance",
+    "employees": 7700,
+    "contract_size_usd": 640000,
+    "public_reference": false,
+    "approval_expires": "2026-05-24",
     "deployed_products": [
-      "platform",
+      "encryption_gateway",
       "enterprise_tier"
     ]
   }

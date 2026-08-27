@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,7 +28,8 @@ def _resolve_table() -> str:
     result = subprocess.run(
         [
             "aws", "cloudformation", "describe-stacks",
-            "--stack-name", "rfp-copilot-dev-data",
+            # STAGE must match the `stage` CDK context the stacks were deployed with.
+            "--stack-name", f"rfp-copilot-{os.environ.get('STAGE', 'poc')}-data",
             "--query", "Stacks[0].Outputs[?OutputKey=='CustomerRefsTableName'].OutputValue",
             "--output", "text",
         ],
@@ -74,8 +76,24 @@ def main() -> None:
             print(f"  {c['customer_id']}  {c['name']:<35}  {ref_status:<7}  expires={expires}")
 
     print(f"\nDone. {len(customers)} customers written.")
-    print("\nNote: cust-004 (Kestrel Logistics) has an expired approval — the retriever will exclude it.")
-    print("      cust-003 (Aurora Federal) is NDA — will not appear as a public reference.")
+
+    # The asymmetry below is what makes hard rule 3 observable. The retriever
+    # scans this table for public_reference == true AND approval_expires >= today
+    # and hands the result to hard_rules.apply_rules() as the approved list; any
+    # customer named in an answer but absent from that list demotes the answer to
+    # amber and appends unapproved_reference:<name>.
+    approved = [c["name"] for c in customers if c["public_reference"]]
+    print(f"\nApproved public references ({len(approved)}): {', '.join(approved)}")
+    print("Not approved for public naming:")
+    for c in customers:
+        if c["public_reference"]:
+            continue
+        why = (
+            f"approval lapsed {c['approval_expires']}"
+            if c["approval_expires"]
+            else "never approved"
+        )
+        print(f"  {c['customer_id']}  {c['name']:<40}  {why}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,11 @@
+{
+  "document_id": "soc2_type2_2024_expired",
+  "title": "SOC 2 Type II Report Summary \u2014 FY2024 (SUPERSEDED)",
+  "excerpt": "SOC 2 Type II report covering Security and Availability for the period 2023-04-01 to 2024-03-31, issued 2024-06-30. Superseded by the FY2026 report. Retained for audit history only; must not be cited as current evidence of the control environment.",
+  "updated_at": "2024-06-30",
+  "expires_on": "2025-06-30",
+  "audience": "certification",
+  "topic_ids": [
+    "soc2"
+  ]
+}

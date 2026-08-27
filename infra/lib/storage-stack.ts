@@ -13,6 +13,11 @@ import { Construct } from 'constructs';
  * Per v0.4 plan §7: incoming RFPs are never auto-ingested into
  * referenceCorpus; promotion requires a deliberate post-deal-close step.
  */
+export interface StorageStackProps extends cdk.StackProps {
+  /** Allowed browser origins for presigned PUT uploads to the incoming bucket. */
+  readonly corsOrigins: string[];
+}
+
 export class StorageStack extends cdk.Stack {
   public readonly incomingBucket: s3.Bucket;
   public readonly referenceCorpusBucket: s3.Bucket;
@@ -22,7 +27,7 @@ export class StorageStack extends cdk.Stack {
   // on the corpus bucket's CMK — required for KB ingestion to succeed.
   public readonly referenceKey: kms.IKey;
 
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props: StorageStackProps) {
     super(scope, id, props);
 
     const incomingKey = new kms.Key(this, 'IncomingKey', {
@@ -55,7 +60,7 @@ export class StorageStack extends cdk.Stack {
       cors: [
         {
           allowedMethods: [s3.HttpMethods.PUT],
-          allowedOrigins: ['https://rfp-copilot.meringue-app.com'],
+          allowedOrigins: props.corsOrigins,
           allowedHeaders: ['*'],
           maxAge: 3000,
         },

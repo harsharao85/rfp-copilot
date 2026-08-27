@@ -32,7 +32,22 @@ function hashDir(dir: string): string {
   return hash.digest('hex').slice(0, 16);
 }
 
+/**
+ * Bedrock model IDs the Lambdas actually invoke. Kept in sync by hand with
+ * lambdas/shared/bedrock_client.py (SONNET / HAIKU) — the IAM grant below is
+ * derived from these, so adding a model there means adding it here.
+ * The `us.` prefix denotes a cross-region inference profile; invoking one
+ * needs both the inference-profile ARN and the underlying foundation-model
+ * ARN in whichever region the profile routes to.
+ */
+const BEDROCK_INFERENCE_PROFILE_IDS = [
+  'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+  'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+];
+
 export interface OrchestrationStackProps extends cdk.StackProps {
+  /** Allowed browser origins for the review + upload HTTP APIs. */
+  readonly corsOrigins: string[];
   readonly incomingBucket: s3.IBucket;
   readonly outputBucket: s3.IBucket;
   readonly referenceCorpusBucket: s3.IBucket;
@@ -183,8 +198,6 @@ export class OrchestrationStack extends cdk.Stack {
     const writerFn = makeLambda('WriterFn', 'excel_writer', 60);
     const reviewGateFn = makeLambda('ReviewGateFn', 'review_gate', 30);
     const reviewApiFn = makeLambda('ReviewApiFn', 'review_api', 30);
-    // Mock sources (Seismic + Gong) behind a single Lambda
-    const mockSourcesFn = makeLambda('MockSourcesFn', 'mock_sources');
     // Ingestion trigger — tiny Lambda fired by S3 events + EventBridge schedules.
     const ingestionTriggerFn = makeLambda('IngestionTriggerFn', 'ingestion_trigger');
     // Task 1: upload API — presign, start, status, download
@@ -215,10 +228,19 @@ export class OrchestrationStack extends cdk.Stack {
       actions: ['bedrock:Retrieve'],
       resources: [props.knowledgeBaseArn],
     }));
+    // Narrowed to the two inference profiles the Lambdas actually call, plus
+    // the foundation models behind them. Region is wildcarded on the
+    // foundation-model ARNs only: a `us.` inference profile fans out across the
+    // US regions, and enumerating them here would re-hardcode a region list
+    // (RISK-16). Account, partition and model ID are all pinned.
+    const bedrockModelResources = BEDROCK_INFERENCE_PROFILE_IDS.flatMap((profileId) => [
+      cdk.Arn.format({ service: 'bedrock', resource: 'inference-profile', resourceName: profileId }, this),
+      `arn:${this.partition}:bedrock:*::foundation-model/${profileId.replace(/^us\./, '')}`,
+    ]);
     for (const fn of [retrieverFn, generatorFn, classifierFn, scorerFn]) {
       fn.addToRolePolicy(new iam.PolicyStatement({
         actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-        resources: ['*'], // narrow to specific foundation-model ARNs in prod
+        resources: bedrockModelResources,
       }));
     }
     // Guardrail invocation permission on the generator only
@@ -336,10 +358,10 @@ export class OrchestrationStack extends cdk.Stack {
     props.jobsTable.grantReadWriteData(reviewGateFn);
     props.jobsTable.grantReadWriteData(reviewApiFn);
     props.questionsTable.grantReadWriteData(reviewApiFn);
-    reviewApiFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['states:SendTaskSuccess', 'states:SendTaskFailure'],
-      resources: ['*'],
-    }));
+    // grantTaskResponse scopes SendTaskSuccess/Failure/Heartbeat to this state
+    // machine's ARN. No dependency cycle: the state machine references
+    // reviewGateFn, not reviewApiFn, so reviewApiFn's role can point back at it.
+    stateMachine.grantTaskResponse(reviewApiFn);
     // Flywheel: review_api writes SME-approved Q&A into the reference corpus
     // bucket's sme-approved/ prefix. The S3 PutObject event fires the
     // ingestion_trigger Lambda, so review_api doesn't need to call
@@ -402,9 +424,15 @@ export class OrchestrationStack extends cdk.Stack {
       corsPreflight: {
         allowHeaders: ['Content-Type'],
         allowMethods: [apigatewayv2.CorsHttpMethod.GET, apigatewayv2.CorsHttpMethod.POST, apigatewayv2.CorsHttpMethod.OPTIONS],
-        allowOrigins: ['*'],
+        allowOrigins: props.corsOrigins,
       },
     });
+    // The Lambdas stamp Access-Control-Allow-Origin on their own responses;
+    // that header carries a single value, so the first configured origin wins.
+    // The full list is enforced by the API's CORS configuration above.
+    reviewApiFn.addEnvironment('CORS_ALLOW_ORIGIN', props.corsOrigins[0]);
+    uploadApiFn.addEnvironment('CORS_ALLOW_ORIGIN', props.corsOrigins[0]);
+
     const reviewIntegration = new apigatewayv2Integrations.HttpLambdaIntegration('ReviewIntegration', reviewApiFn);
     httpApi.addRoutes({ path: '/reviews',                   methods: [apigatewayv2.HttpMethod.GET],  integration: reviewIntegration });
     httpApi.addRoutes({ path: '/reviews/{jobId}',           methods: [apigatewayv2.HttpMethod.GET],  integration: reviewIntegration });
@@ -413,20 +441,7 @@ export class OrchestrationStack extends cdk.Stack {
 
     this.reviewApiUrl = httpApi.apiEndpoint;
 
-    // Mock sources API — simulates Seismic + Gong behind a single Lambda.
-    // 5% error rate + 10% tail latency are deliberate (see mock_sources/handler.py).
-    const mockSourcesApi = new apigatewayv2.HttpApi(this, 'MockSourcesApi', {
-      description: 'Mock Seismic + Gong API for demo',
-    });
-    const mockIntegration = new apigatewayv2Integrations.HttpLambdaIntegration('MockSourcesIntegration', mockSourcesFn);
-    mockSourcesApi.addRoutes({ path: '/seismic/content', methods: [apigatewayv2.HttpMethod.GET], integration: mockIntegration });
-    mockSourcesApi.addRoutes({ path: '/gong/calls',      methods: [apigatewayv2.HttpMethod.GET], integration: mockIntegration });
-
-    // Wire the mock sources URL into the retriever so _mock_api_passages() can call it.
-    retrieverFn.addEnvironment('MOCK_SOURCES_API_URL', mockSourcesApi.apiEndpoint);
-
     new cdk.CfnOutput(this, 'ReviewApiUrl', { value: this.reviewApiUrl });
-    new cdk.CfnOutput(this, 'MockSourcesApiUrl', { value: mockSourcesApi.apiEndpoint });
     new cdk.CfnOutput(this, 'StateMachineArn', { value: this.stateMachineArn });
     new cdk.CfnOutput(this, 'GuardrailId', { value: this.guardrailId });
 
@@ -445,7 +460,7 @@ export class OrchestrationStack extends cdk.Stack {
       corsPreflight: {
         allowHeaders: ['Content-Type'],
         allowMethods: [apigatewayv2.CorsHttpMethod.GET, apigatewayv2.CorsHttpMethod.POST, apigatewayv2.CorsHttpMethod.OPTIONS],
-        allowOrigins: ['*'],
+        allowOrigins: props.corsOrigins,
       },
     });
     const uploadIntegration = new apigatewayv2Integrations.HttpLambdaIntegration('UploadIntegration', uploadApiFn);

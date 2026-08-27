@@ -1,0 +1,18 @@
+{
+  "document_id": "helix_reinsurance_caiq_2025",
+  "title": "Completed CAIQ extract \u2014 Helix Reinsurance (assurance and supply chain)",
+  "excerpt": "CAIQ v4.0.3 responses covering A&A-01 through A&A-06 and STA-01 through STA-14. SOC 2 Type II and ISO/IEC 27001 evidence, annual independent penetration testing, and a signed CycloneDX software bill of materials per deployable artifact.",
+  "customer_name": "Helix Reinsurance",
+  "customer_id": "cust-hxr-006",
+  "questionnaire_id": "caiq-v4-hxr-2025",
+  "questionnaire_name": "CAIQ v4.0.3",
+  "answered_at": "2025-09-22",
+  "approved_at": "2025-09-22",
+  "approved_by": "l.fontaine@echoworx.example",
+  "audience": "customer",
+  "topic_ids": [
+    "soc2",
+    "pentest",
+    "sbom"
+  ]
+}

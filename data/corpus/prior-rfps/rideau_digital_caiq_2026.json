@@ -1,0 +1,17 @@
+{
+  "document_id": "rideau_digital_caiq_2026",
+  "title": "Completed CAIQ extract \u2014 Province of Rideau, Digital Services (residency)",
+  "excerpt": "CAIQ v4.0.3 responses covering DCS-01 through DCS-09. Tenant pinned to the Canadian residency zone; message bodies, attachments, key material and derived indexes remain in Canada. Support access from outside Canada requires a named approval per session.",
+  "customer_name": "Province of Rideau - Digital Services",
+  "customer_id": "cust-prd-004",
+  "questionnaire_id": "caiq-v4-prd-2026",
+  "questionnaire_name": "CAIQ v4.0.3",
+  "answered_at": "2026-01-27",
+  "approved_at": "2026-01-27",
+  "approved_by": "s.okonkwo@echoworx.example",
+  "audience": "customer",
+  "topic_ids": [
+    "data_residency",
+    "iso27001"
+  ]
+}

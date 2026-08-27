@@ -1,0 +1,10 @@
+{
+  "document_id": "sso_saml_oidc",
+  "title": "Single Sign-On \u2014 SAML 2.0 and OpenID Connect",
+  "excerpt": "Administrative and end-user sign-in federate through SAML 2.0 or OpenID Connect against the tenant's identity provider. Signed assertions are mandatory; encrypted assertions are optional. Group claims drive role assignment inside the tenant.",
+  "updated_at": "2026-04-14",
+  "audience": "internal",
+  "topic_ids": [
+    "sso"
+  ]
+}

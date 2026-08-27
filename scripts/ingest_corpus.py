@@ -17,13 +17,31 @@ import os
 import sys
 import boto3
 
-BUCKET       = "rfp-copilot-dev-storage-referencecorpusbucketeced4-bw4yb6fzyp3c"
-INDEX_ID     = "edecb417-85e4-41e4-a31f-57d77fe9910a"
-DATASOURCE_ID = "c90c5334-f240-4e74-baa5-60b1b36a62bf"
-DATA_ROOT    = os.path.join(os.path.dirname(__file__), "..", "data")
+# Resource identity comes from the environment, never from the source tree —
+# these name a specific account's resources and must not be committed.
+#   CORPUS_BUCKET=... KENDRA_INDEX_ID=... KENDRA_DATASOURCE_ID=... \
+#     python3 scripts/ingest_corpus.py
+BUCKET        = os.environ.get("CORPUS_BUCKET", "")
+INDEX_ID      = os.environ.get("KENDRA_INDEX_ID", "")
+DATASOURCE_ID = os.environ.get("KENDRA_DATASOURCE_ID", "")
+DATA_ROOT     = os.path.join(os.path.dirname(__file__), "..", "data")
 
-s3      = boto3.client("s3", region_name="us-east-1")
-kendra  = boto3.client("kendra", region_name="us-east-1")
+_missing = [
+    name
+    for name, value in (
+        ("CORPUS_BUCKET", BUCKET),
+        ("KENDRA_INDEX_ID", INDEX_ID),
+        ("KENDRA_DATASOURCE_ID", DATASOURCE_ID),
+    )
+    if not value
+]
+if _missing:
+    sys.exit(f"ERROR: set {', '.join(_missing)} before running this script.")
+
+# No region_name: boto3 resolves it from AWS_REGION / AWS_DEFAULT_REGION or the
+# operator's profile, so the script follows whichever region they deployed into.
+s3      = boto3.client("s3")
+kendra  = boto3.client("kendra")
 
 
 def put(key: str, body, content_type: str = "application/octet-stream") -> None:

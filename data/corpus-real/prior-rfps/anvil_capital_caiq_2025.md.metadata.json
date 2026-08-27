@@ -1,0 +1,19 @@
+{
+  "metadataAttributes": {
+    "document_id": "anvil_capital_caiq_2025",
+    "source_type": "prior_rfp",
+    "source_id": "prior_rfps",
+    "topic_ids": [
+      "dr_bcp",
+      "incident_response"
+    ],
+    "approved_at": "2025-11-06T00:00:00+00:00",
+    "approved_by": "l.fontaine@echoworx.example",
+    "answered_at": "2025-11-06T00:00:00+00:00",
+    "audience": "customer",
+    "customer_name": "Anvil Capital Partners",
+    "customer_id": "cust-acp-005",
+    "questionnaire_id": "caiq-v4-acp-2025",
+    "questionnaire_name": "CAIQ v4.0.3"
+  }
+}

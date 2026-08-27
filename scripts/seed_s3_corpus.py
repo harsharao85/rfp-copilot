@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -134,8 +135,10 @@ def _ingest(kb_id: str, ds_id: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bucket", help="Reference corpus bucket (resolved from CFN if omitted)")
-    parser.add_argument("--stack-prefix", default="rfp-copilot-dev",
-                        help="CFN stack name prefix (default: rfp-copilot-dev)")
+    # STAGE must match the `stage` CDK context the stacks were deployed with.
+    default_prefix = f"rfp-copilot-{os.environ.get('STAGE', 'poc')}"
+    parser.add_argument("--stack-prefix", default=default_prefix,
+                        help=f"CFN stack name prefix (default: {default_prefix})")
     parser.add_argument("--skip-ingest", action="store_true",
                         help="Upload only; do not trigger KB ingestion")
     args = parser.parse_args()
@@ -159,11 +162,16 @@ def main() -> None:
     ds_id = _cfn_output(kb_stack, "DataSourceId")
     _ingest(kb_id, ds_id)
 
-    print("\nStale-prior summary (freshness-suppression demo):")
-    print("  acme_financial_soc2_answer (approved 2025-07-01) is stale vs. soc2_cert_2025 (updated 2025-10-01).")
-    print("  bluebird_encryption_answer (approved 2025-08-15) is stale vs. encryption_whitepaper (updated 2025-09-05).")
-    print("  globex_fedramp_answer      (approved 2026-02-01) is stale vs. fedramp_status_2026   (updated 2026-03-01).")
-    print("  northwind_sso_answer       (approved 2026-01-15) is FRESH (post-dates sso_mfa_guide 2025-10-20).")
+    print("\nSuperseded-evidence summary (freshness demo):")
+    print("  soc2_type2_2024_expired (updated 2024-06-30, expires_on 2025-06-30) is SUPERSEDED.")
+    print("  soc2_type2_2026         (updated 2026-06-15, expires_on 2027-06-15) is current.")
+    print("  Both answer CAIQ-015 and CAIQ-016 in data/incoming/echoworx-caiq-v4-40q.xlsx.")
+    print("  The superseded report scores F=0.2 against the current report's F=1.0, and its")
+    print("  citation line carries the (EXPIRED) suffix. Nothing suppresses it at query time")
+    print("  — retriever/handler.py removed that — so on a question asking about the old")
+    print("  report by date it legitimately ranks first. The amber tier and the (EXPIRED)")
+    print("  marker are what stop it shipping unreviewed.")
+    print("  Verify offline with: PYTHONPATH=. python scripts/verify_fixture.py")
 
 
 if __name__ == "__main__":

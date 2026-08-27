@@ -1,0 +1,18 @@
+{
+  "document_id": "meridian_health_caiq_2026",
+  "title": "Completed CAIQ extract \u2014 Meridian Health Group (privacy and processing)",
+  "excerpt": "CAIQ v4.0.3 responses covering DSP-01 through DSP-19. Standard Data Processing Agreement with the 2021 EU Standard Contractual Clauses, a published sub-processor register, and thirty days' notice before any sub-processor change takes effect.",
+  "customer_name": "Meridian Health Group",
+  "customer_id": "cust-mhg-003",
+  "questionnaire_id": "caiq-v4-mhg-2026",
+  "questionnaire_name": "CAIQ v4.0.3",
+  "answered_at": "2026-02-18",
+  "approved_at": "2026-02-18",
+  "approved_by": "s.okonkwo@echoworx.example",
+  "audience": "customer",
+  "topic_ids": [
+    "dpa",
+    "gdpr",
+    "data_residency"
+  ]
+}

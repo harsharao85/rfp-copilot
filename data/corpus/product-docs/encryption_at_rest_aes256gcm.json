@@ -1,0 +1,10 @@
+{
+  "document_id": "encryption_at_rest_aes256gcm",
+  "title": "Encryption at Rest \u2014 AES-256-GCM Envelope Design",
+  "excerpt": "Message bodies, attachments and metadata at rest are sealed with AES-256-GCM under per-message data keys. Data keys are wrapped by a tenant key held in a managed key service and are never written to disk in the clear.",
+  "updated_at": "2026-05-04",
+  "audience": "internal",
+  "topic_ids": [
+    "encryption_at_rest"
+  ]
+}

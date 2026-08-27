@@ -7,7 +7,7 @@ Outputs:  data/corpus-real/<prefix>/<doc_id>.<ext>
 
 - compliance/*.json   → multi-page PDF (reportlab) + .pdf.metadata.json
 - product-docs/*.json → long-form markdown         + .md.metadata.json
-- prior-rfps/*.json   → short markdown             + .md.metadata.json
+- prior-rfps/*.json   → questionnaire extract md   + .md.metadata.json
 - sme-approved/*.json → Q&A markdown (H-signal)    + .md.metadata.json
 
 Metadata sidecar format (required verbatim by Bedrock Knowledge Bases):
@@ -17,9 +17,26 @@ Metadata sidecar format (required verbatim by Bedrock Knowledge Bases):
                           "topic_ids": ["..."],
                           ...}}
 
-The source data/corpus/ tree is untouched — the retriever unit tests still
-depend on it. Regenerate with:
+Sidecars additionally carry the flat Provenance attributes that
+lambdas/retriever/handler.py:_hydrate_provenance() feeds into
+shared.provenance.Provenance.from_sidecar() — audience, customer_name,
+customer_id, questionnaire_name, answered_at, approved_by, expires_on. That
+is what turns a citation from a bare document id into a source line an SME can
+act on, and what lets the divergence detector group prior answers by customer.
+
+The source data/corpus/ tree is untouched. Regenerate with:
   python scripts/generate_corpus_documents.py
+
+Content note: every organisation, auditor, person and certificate number below
+is invented. The corpus describes a fictitious cloud email-encryption service.
+
+Rule hygiene (deliberate, do not "improve"): the product documents that back
+the GREEN questions in data/incoming/echoworx-caiq-v4-40q.xlsx avoid the
+vocabulary that lambdas/hard_rules/rules.py demotes on — "audit", "certified",
+"compliant", named frameworks, pricing words, RTO/RPO, "will support", "by
+<year>". Those documents say "event record" rather than "audit log" for that
+reason. A green cell that silently turns amber because a whitepaper said
+"audit log" is a fixture bug, not a policy finding.
 """
 from __future__ import annotations
 
@@ -27,11 +44,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from reportlab.lib import colors
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "data" / "corpus"
@@ -44,420 +61,1579 @@ SOURCE_TYPE_BY_PREFIX: dict[str, str] = {
     "sme-approved":  "sme_approved_answer",
 }
 
+SOURCE_ID_BY_PREFIX: dict[str, str] = {
+    "compliance":    "compliance_store",
+    "product-docs":  "product_docs",
+    "prior-rfps":    "prior_rfps",
+    "sme-approved":  "sme_approved_answers",
+}
+
 # ---------------------------------------------------------------------------
-# Per-document content — handwritten expansions keyed by document_id.
-# Each body builds on the compact excerpt in data/corpus/**.
+# compliance/ — rendered as PDFs. These back the AMBER compliance questions, so
+# framework names and attestation language are expected here.
 # ---------------------------------------------------------------------------
 
 COMPLIANCE_BODIES: dict[str, list[dict[str, Any]]] = {
-    "soc2_cert_2025": [
-        {"h": "Report scope and boundaries"},
-        {"p": "This Service Organization Control 2 (SOC 2) Type II report addresses the suitability of the design and operating effectiveness of controls at the service organization relevant to the Trust Services Criteria for Security, Availability, and Confidentiality. The report period is October 1, 2024 through September 30, 2025."},
-        {"p": "The system boundary comprises the multi-tenant SaaS platform and its supporting infrastructure within Amazon Web Services regions us-east-1 and us-west-2, including application services, data stores, identity and access management, logging and monitoring pipelines, and the internal tooling used by engineering and operations personnel. Corporate IT, HR systems, and marketing properties are explicitly out of scope."},
-        {"p": "Subservice organizations — Amazon Web Services for compute, storage, and managed database infrastructure; Okta for workforce identity; Datadog for application performance monitoring — are evaluated under the carve-out method. Complementary subservice organization controls (CSOCs) expected of each are enumerated in Appendix B."},
+    "soc2_type2_2026": [
+        {"h": "Report identification"},
+        {"p": "This document summarises the System and Organization Controls 2 (SOC 2) Type II report on the suitability of design and operating effectiveness of controls relevant to the Trust Services Criteria for Security, Availability and Confidentiality. The report period runs from 1 April 2025 to 31 March 2026. The report was issued on 15 June 2026 by an independent CPA firm registered with the AICPA peer review program. The summary is prepared for prospective customers; the full report is released under a mutual non-disclosure agreement."},
+        {"p": "This summary supersedes the FY2024 summary in its entirety. Where an earlier report is held on file by a customer, the FY2026 report is the only one that describes the control environment as it operates today."},
+        {"h": "System boundary"},
+        {"p": "The system in scope is the cloud email encryption service: the inbound and outbound encryption gateway, the policy engine that selects a delivery method per message, the recipient portal used where no interoperable delivery path exists, the key management plane, and the tenant administration plane through which customer administrators configure policy and review event records. Corporate information technology, the marketing website and the internal customer relationship system are outside the boundary."},
+        {"p": "Subservice organisations are treated under the carve-out method. Infrastructure hosting, managed key storage and the workforce identity provider are carved out; the complementary subservice organisation controls expected of each are listed in Appendix B. Customers are expected to obtain and review those providers' own reports as part of their supply chain assessment."},
         {"h": "Trust Services Criteria coverage"},
-        {"p": "Security criteria (Common Criteria CC1.x through CC9.x) are addressed in full. Availability criteria (A1.1 through A1.3) are addressed in the context of the published service level commitment of 99.9% monthly uptime for Enterprise tier customers. Confidentiality criteria (C1.1 and C1.2) cover the classification, handling, retention, and disposal of customer data. Processing Integrity and Privacy criteria are not in scope for this report."},
-        {"h": "Control activity summary"},
+        {"p": "The Common Criteria CC1.1 through CC9.2 are addressed in full. Availability criteria A1.1 through A1.3 are addressed against the published service commitment of 99.95% monthly uptime for the Enterprise plan. Confidentiality criteria C1.1 and C1.2 address classification, handling, retention and disposal of message content and metadata. Processing Integrity and Privacy criteria are not within the scope of this report; conformance to ISO/IEC 27018:2019 is attested separately."},
+        {"h": "Control activities and test results"},
         {"table": [
-            ["TSC reference", "Control activity", "Test result"],
-            ["CC6.1", "Logical access to production systems is restricted to authenticated personnel via single sign-on with MFA.", "No exceptions noted"],
-            ["CC6.6", "All production administrative access is brokered through a bastion with session recording.", "No exceptions noted"],
-            ["CC6.7", "Encryption at rest uses AES-256-GCM with keys managed in AWS KMS. Key material is never exported in plaintext.", "No exceptions noted"],
-            ["CC7.2", "Security-relevant events are forwarded to a centralized SIEM with 13-month retention and 24x7 monitoring.", "No exceptions noted"],
-            ["CC7.3", "The incident response process is tested at least twice annually via tabletop and one live-fire exercise.", "No exceptions noted"],
-            ["A1.2", "Data is replicated asynchronously across availability zones with a target recovery point objective of 15 minutes.", "No exceptions noted"],
-            ["C1.1", "Customer data is classified at ingestion into one of four tiers with handling requirements escalating by tier.", "No exceptions noted"],
+            ["Criterion", "Control activity", "Result"],
+            ["CC6.1", "Access to production requires federated sign-in with a hardware-backed second factor. Standing access is reviewed quarterly.", "No exceptions noted"],
+            ["CC6.6", "Administrative sessions to production are brokered through a recorded access path; direct network reachability is not available.", "No exceptions noted"],
+            ["CC6.7", "Message bodies, attachments and metadata at rest are encrypted with AES-256-GCM under per-message data keys wrapped by a tenant key-encryption key.", "No exceptions noted"],
+            ["CC6.7", "External connections require TLS 1.2 or above with forward-secret cipher suites. TLS 1.0 and 1.1 are refused at every listener.", "No exceptions noted"],
+            ["CC7.2", "Security-relevant events are centralised, correlated and retained for 400 days, with continuous monitoring by a 24x7 operations function.", "No exceptions noted"],
+            ["CC7.3", "The incident response procedure is exercised twice per period, once as a tabletop and once as a live scenario.", "No exceptions noted"],
+            ["CC7.4", "Confirmed incidents affecting a tenant are notified to that tenant's registered security contacts within 72 hours of confirmation.", "No exceptions noted"],
+            ["CC8.1", "Changes are peer reviewed, statically analysed and scanned for vulnerable dependencies before merge; emergency changes are reviewed retrospectively within five business days.", "No exceptions noted"],
+            ["A1.2", "Each residency zone is served from two regions in an active-active configuration with continuous replication of tenant state.", "No exceptions noted"],
+            ["C1.1", "Message content is classified at ingestion and handled under the retention schedule elected by the tenant.", "No exceptions noted"],
+            ["C1.2", "Deletion requests are executed within thirty days and confirmed to the requesting tenant in writing.", "No exceptions noted"],
         ]},
         {"h": "Independent service auditor's opinion"},
-        {"p": "In our opinion, in all material respects, the controls stated in management's description were suitably designed to provide reasonable assurance that the service commitments and system requirements would be achieved based on the applicable trust services criteria, and operated effectively throughout the period October 1, 2024 to September 30, 2025. No qualified opinions are issued."},
-        {"p": "This report is intended solely for the information and use of the service organization, user entities of the service organization's services during the period, and prospective user entities, independent auditors and practitioners providing services to such user entities, and regulators with direct oversight. Reproduction or distribution beyond that set of recipients requires prior written consent."},
+        {"p": "In the auditor's opinion, in all material respects, the controls stated in management's description were suitably designed and operated effectively throughout the period 1 April 2025 to 31 March 2026 to provide reasonable assurance that the service commitments and system requirements would be achieved based on the applicable trust services criteria. The opinion is unqualified. No exceptions were noted in the tests of controls described in Section 4 of the full report."},
+        {"h": "Incident notification commitment"},
+        {"p": "Management commits that where an event has been confirmed to have affected the confidentiality, integrity or availability of a tenant's data, that tenant's registered security contacts are notified within 72 hours of confirmation. The initial notification states what is known, what is not yet known, the immediate containment position and the point of contact for follow-up. A written post-incident review is delivered within thirty days of incident closure. Events prevented by controls before impact, and events confined to internal systems without effect on tenant isolation, are not notifiable under this commitment; they are recorded and reviewed internally."},
         {"h": "Complementary user entity controls"},
-        {"p": "The achievement of the trust services criteria is dependent in part on controls that user entities implement on their own. User entities are responsible for: (a) provisioning and deprovisioning their own personnel in the identity provider; (b) configuring their tenant's security settings, including session timeout, IP allowlisting, and MFA enforcement; (c) reviewing audit logs exported from the platform on a schedule aligned to their own compliance obligations; (d) reporting suspected security events affecting their tenant to the service organization's security operations team through the documented channels."},
-        {"h": "Bridge letter and next reporting period"},
-        {"p": "A bridge letter covering the period from October 1, 2025 through the issue date of the subsequent SOC 2 Type II report is available on the Trust Center under non-disclosure. The next SOC 2 Type II report is scheduled for issuance in the fourth quarter of 2026, covering the twelve-month period ending September 30, 2026."},
-        {"h": "Appendix A — list of principal service commitments"},
-        {"p": "Commitment 1: the service maintains encryption at rest and in transit for all customer data using industry-standard algorithms and key lengths. Commitment 2: logical access to customer data by service organization personnel requires documented business need, MFA, and is recorded. Commitment 3: customer-initiated data deletion requests are honored within 30 days. Commitment 4: confirmed security incidents affecting a customer tenant are communicated within 72 hours. Commitment 5: the service maintains a monthly uptime of 99.9% for Enterprise tier customers, measured as a rolling monthly average excluding scheduled maintenance windows announced at least 14 days in advance."},
-        {"h": "Appendix B — complementary subservice organization controls"},
-        {"p": "AWS is expected to maintain physical and environmental controls in accordance with its own SOC 2 Type II report and AWS Artifact attestations. Okta is expected to maintain the availability and integrity of the workforce identity provider. Datadog is expected to maintain the confidentiality of the telemetry ingested from the service organization's environment. User entities should review the relevant reports from these subservice organizations as part of their own vendor risk assessments."},
-        {"h": "Management's description of the system"},
-        {"p": "The system supporting the services in scope is a multi-tenant SaaS platform deployed on AWS. The platform comprises application compute (containers orchestrated on AWS ECS with Fargate), relational and key-value data stores (Amazon Aurora and Amazon DynamoDB), object storage (Amazon S3), and asynchronous messaging and workflow (Amazon SQS, Amazon SNS, AWS Step Functions). Customer tenant isolation is enforced at the application layer by a tenant-identifier carried on every request and validated at data-access boundaries, reinforced at the storage layer by row-level scoping for relational data and key-prefix scoping for object storage."},
-        {"p": "Personnel operating the system are employees and long-term contractors of the service organization, organized into engineering, operations, security, compliance, and customer-facing functions. Access to production is limited to a defined subset of engineering and operations personnel, controlled through a standing-approval pattern where routine production operations are pre-authorized and all access is logged; break-glass access is available through a documented, reviewed process requiring a second authorizer."},
-        {"p": "Software changes are managed through a documented change-management process. Every change is traceable from the originating ticket through peer review, automated testing, deployment approval, and post-deployment verification. Significant changes — defined as changes that alter the boundary of the system, the data it processes, or the controls operating over it — require an architecture review and, where appropriate, a risk assessment by the security function."},
-        {"h": "Risk assessment process"},
-        {"p": "The service organization performs a risk assessment on a defined cadence and whenever material changes to the business or the system occur. The assessment identifies threats to the service commitments and system requirements, analyzes the likelihood and impact of those threats in light of the control environment, and determines the appropriate response — accept, mitigate, transfer, or avoid. Threats and controls are tracked in a risk register reviewed quarterly by the risk committee, with a management-level review at least annually."},
-        {"p": "For the reporting period, the risk register identified and addressed threats in the following categories: external attack against customer-facing endpoints; compromise of administrative credentials; insider misuse by authorized personnel; supply-chain compromise through software dependencies or subservice organizations; data loss due to infrastructure failure; service disruption due to regional events; and regulatory or contractual non-compliance. Each threat is mapped to controls expected to mitigate it, and monitoring is in place to detect control failures."},
-        {"h": "Changes during the reporting period"},
-        {"p": "During the reporting period, the following changes to the control environment are noted: the identity provider for workforce single sign-on was migrated from a prior vendor to the current provider (Okta); the central log aggregation platform's retention was increased from 13 months to 15 months to align with an updated customer contractual commitment; the incident response playbooks for regional-event scenarios were revised following a live-fire DR exercise in April 2025. None of these changes materially affected the design or operating effectiveness of the controls in scope; all changes were evaluated against the applicable trust services criteria and followed the standard change management process."},
-        {"h": "Tests performed and results — detail"},
-        {"p": "Control testing was performed through a combination of inquiry, observation, inspection of evidence, and re-performance of control activities. Sample sizes followed the AICPA guidance for attestation engagements, drawn on a representative basis across the reporting period. The auditor's tests of controls and the results of those tests are summarized below."},
+        {"p": "Achievement of the trust services criteria depends in part on controls operated by customers. Customers are responsible for: provisioning and deprovisioning their own personnel in their identity provider, and keeping the federation configuration current; configuring tenant policy, including which delivery methods are permitted to which recipient domains; enforcing a second factor on their own administrators; reviewing the event records exported from the tenant plane on a cadence aligned to their own obligations; and reporting suspected security events affecting their tenant through the documented channel rather than through general support."},
+        {"h": "Bridge letter"},
+        {"p": "A bridge letter covering 1 April 2026 to the date of this summary is available under non-disclosure. It affirms that no material change to the control environment has occurred between the end of the report period and the date of issue. The next Type II report is expected to cover the twelve months ending 31 March 2027."},
+        {"h": "Appendix A — principal service commitments"},
+        {"p": "Commitment 1: message content is encrypted at rest and in transit using algorithms and key lengths consistent with current guidance from recognised standards bodies. Commitment 2: access to tenant content by service personnel requires a recorded business justification, federated sign-in with a second factor, and time-bounded elevation. Commitment 3: customer-initiated deletion is completed within thirty days. Commitment 4: confirmed incidents affecting a tenant are notified within 72 hours. Commitment 5: the Enterprise plan maintains 99.95% monthly uptime measured as a rolling monthly average, excluding maintenance announced at least fourteen days in advance."},
+        {"h": "Appendix B — complementary subservice organisation controls"},
+        {"p": "The infrastructure provider is expected to maintain physical and environmental controls, hypervisor isolation and regional availability consistent with its own SOC 2 Type II report. The managed key service provider is expected to maintain the confidentiality and availability of wrapped key material and to log every key operation. The workforce identity provider is expected to maintain the integrity and availability of workforce authentication. Customers should obtain these providers' reports directly."},
+    ],
+    "iso27001_soa_extract_2026": [
+        {"h": "Certificate particulars"},
+        {"p": "The information security management system operated by the service organisation has been assessed against ISO/IEC 27001:2022 and found to conform. Certificate ISMS-2026-04417 was issued on 10 February 2026 and is valid to 9 February 2029, subject to satisfactory surveillance in each intervening year. The certification body is accredited under the International Accreditation Forum multilateral recognition arrangement, and the certificate is verifiable in the accreditation body's public register."},
+        {"h": "Scope statement"},
+        {"p": "The certified scope is: the design, development, operation and support of the cloud email encryption service, including the encryption gateway, the policy engine, the recipient portal, the key management plane, the tenant administration plane, and the engineering and operational functions that build and run them. The scope covers all residency zones in which the service is offered. Corporate functions with no role in operating the service are excluded from scope, and the exclusion is recorded with justification in the Statement of Applicability."},
+        {"h": "Statement of Applicability — extract"},
+        {"p": "Statement of Applicability version 6.1, dated 22 January 2026, evaluates all 93 controls in Annex A of ISO/IEC 27001:2022. Ninety are applicable and implemented. Three are declared not applicable, each with a recorded justification: A.7.11 (supporting utilities) and A.7.12 (cabling security), both physical controls carried by the carved-out infrastructure provider and not operable by the service organisation; and A.5.7 (threat intelligence) is applicable but limited to commercially available and open sources, as classified national sources are not lawfully available to a private-sector provider in the operating jurisdictions."},
         {"table": [
-            ["TSC reference", "Nature of test", "Sample size", "Result"],
-            ["CC1.1", "Inspected governance documents and management review minutes.", "All meetings held", "No exceptions noted"],
-            ["CC2.2", "Inspected evidence of communication of policies to personnel.", "25 of 250 personnel", "No exceptions noted"],
-            ["CC3.1", "Inspected risk assessment output and mapped to treatment plan.", "All risk categories", "No exceptions noted"],
-            ["CC5.2", "Observed onboarding and deactivation for sampled personnel events.", "30 events from 900", "No exceptions noted"],
-            ["CC6.1", "Re-performed MFA policy verification for sampled production access.", "40 access events from ~8,000", "No exceptions noted"],
-            ["CC6.2", "Inspected logs of administrative access through the bastion.", "All bastion sessions for 10 sample days", "No exceptions noted"],
-            ["CC6.7", "Inspected KMS key policies and AWS CloudTrail logs of key usage.", "All production CMKs", "No exceptions noted"],
-            ["CC7.2", "Inspected SIEM retention configuration and sample alert handling.", "20 alerts from thousands", "No exceptions noted"],
-            ["CC7.3", "Inspected tabletop exercise and live-fire exercise records.", "2 exercises in period", "No exceptions noted"],
-            ["CC8.1", "Inspected change management records and emergency-change approvals.", "50 standard + all emergency changes", "No exceptions noted"],
-            ["A1.2", "Inspected replication monitoring dashboards and DR exercise reports.", "All DR-relevant metrics over period", "No exceptions noted"],
-            ["A1.3", "Inspected backup test records and sample restore artifacts.", "12 monthly tests", "No exceptions noted"],
-            ["C1.1", "Re-performed classification labeling against sample ingested data.", "50 records from millions", "No exceptions noted"],
+            ["Annex A control", "Implementation summary", "Status"],
+            ["A.5.15 Access control", "Unique identities, federated sign-in, second factor for any access to tenant content, entitlements derived from role, quarterly review.", "Implemented"],
+            ["A.5.23 Cloud services security", "Supplier assessment before onboarding, contractual security terms, annual reassessment, exit plan per supplier.", "Implemented"],
+            ["A.5.29 Security during disruption", "Continuity arrangements per residency zone, exercised twice yearly, objectives published to customers.", "Implemented"],
+            ["A.5.30 ICT readiness for continuity", "Recovery objectives set per component, verified in exercise, deviations tracked to closure.", "Implemented"],
+            ["A.8.9 Configuration management", "Infrastructure defined as code, drift detected continuously, out-of-band change blocked by policy.", "Implemented"],
+            ["A.8.12 Data leakage prevention", "Egress controls on production networks, content inspection on administrative export paths.", "Implemented"],
+            ["A.8.16 Monitoring activities", "Central event pipeline, detection rules under a documented lifecycle, 24x7 triage with severity-based response times.", "Implemented"],
+            ["A.8.24 Use of cryptography", "Cryptography policy setting approved algorithms, minimum key sizes and protocol versions; reviewed annually against published guidance.", "Implemented"],
+            ["A.8.28 Secure coding", "Secure coding standard, mandatory peer review, static analysis and dependency analysis gating merge.", "Implemented"],
+            ["A.5.7 Threat intelligence", "Commercial and open sources only; classified sources unavailable to the organisation.", "Applicable, limited"],
+            ["A.7.11 Supporting utilities", "Carried by the infrastructure provider under the carve-out.", "Not applicable"],
+            ["A.7.12 Cabling security", "Carried by the infrastructure provider under the carve-out.", "Not applicable"],
         ]},
-        {"h": "Description of criteria for selecting customers to be informed of incidents"},
-        {"p": "An incident is considered reportable to an affected customer when an event has been confirmed to have affected the confidentiality, integrity, or availability of that customer's tenant or data, or where a reasonable person would conclude on the balance of evidence that such effect occurred. Events that are confined to internal systems and do not affect tenant isolation, or events that are prevented by controls before impact occurs, are not reportable under this criterion. Reporting follows the service organization's incident response procedure and is executed through the communication channels registered against the tenant."},
-        {"h": "Appendix C — glossary of terms"},
-        {"p": "ATO: Authority to Operate. BYOK: Bring Your Own Key. CMK: Customer Master Key. CSOC: Complementary Subservice Organization Control. DR: Disaster Recovery. GCM: Galois/Counter Mode. HSM: Hardware Security Module. IdP: Identity Provider. KMS: Key Management Service. MFA: Multi-Factor Authentication. NIST: National Institute of Standards and Technology. OIDC: OpenID Connect. RPO: Recovery Point Objective. RTO: Recovery Time Objective. SAML: Security Assertion Markup Language. SCIM: System for Cross-domain Identity Management. SIEM: Security Information and Event Management. SoA: Statement of Applicability. SOC: System and Organization Controls. SP: Service Provider. SSDLC: Secure Software Development Lifecycle. TLS: Transport Layer Security. TSC: Trust Services Criteria."},
+        {"h": "Surveillance and internal audit"},
+        {"p": "The certification cycle comprises the initial Stage 1 and Stage 2 assessment, annual surveillance in years two and three, and recertification at the end of year three. Surveillance covers a rotating subset of applicable controls selected by the external auditor on the basis of risk and prior findings; in practice roughly a third of applicable controls are examined at each surveillance visit. The internal audit programme covers the whole management system every twelve months, independently of the external cycle, and its findings feed the management review."},
+        {"h": "Nonconformities"},
+        {"p": "The most recent surveillance raised two minor nonconformities and no major nonconformities. The first concerned a supplier reassessment completed nine days after its due date; corrected by moving reassessment scheduling into the same tracking system as the rest of the supplier lifecycle. The second concerned a detection rule retired without the retirement rationale being recorded; corrected by making the rationale field mandatory in the rule lifecycle workflow. Both corrective actions have been implemented and verified effective."},
+        {"h": "Management review"},
+        {"p": "Executive management reviews the management system quarterly. Each review considers the risk register and treatment plan, performance against the defined security metrics, the status of internal and external audit findings, customer-raised security observations, and resourcing. Minutes are retained, and a redacted extract is available to customers under non-disclosure on request."},
     ],
-    "iso27001_cert_2026": [
-        {"h": "Certificate of registration"},
-        {"p": "This certifies that the information security management system operated by the service organization has been assessed and found to conform to the requirements of ISO/IEC 27001:2022. Certificate number ISMS-2026-00142 is valid from January 15, 2026 through January 14, 2029, subject to continued satisfactory surveillance."},
-        {"h": "Scope of certification"},
-        {"p": "The scope of the certified information security management system comprises the design, development, operation, and support of the multi-tenant Software-as-a-Service platform, including the underlying cloud infrastructure, the internal tools used to build and operate the platform, and the workforce identity, access, and monitoring systems supporting those activities. Corporate IT functions unrelated to platform operations are outside the scope of this certification."},
-        {"h": "Statement of Applicability summary"},
-        {"p": "All 93 controls in Annex A of ISO/IEC 27001:2022 have been evaluated for applicability. The Statement of Applicability (SoA) version 4.2, dated December 2025, is available on the Trust Center under non-disclosure. The following controls are explicitly declared not applicable, with justifications recorded in the SoA: A.5.7 (threat intelligence from classified sources — not within the legal remit of a private-sector provider in our operating jurisdictions), A.7.11 (supporting utilities for on-premises data centers — not applicable as the service is cloud-hosted and physical and environmental controls are carried by the subservice organization)."},
-        {"h": "Audit cycle and surveillance"},
-        {"p": "Certification audits follow the standard three-year cycle: an initial (Stage 1 and Stage 2) certification audit, followed by two annual surveillance audits in years two and three, followed by a recertification audit at the end of year three. Surveillance audits cover a rotating subset of Annex A controls, selected by the auditor based on risk and the prior audit outcome; in practice roughly one-third of applicable controls are examined at each surveillance. Internal audits cover the full ISMS annually, independent of the external cycle."},
-        {"h": "Management commitment"},
-        {"p": "Executive management reviews the ISMS at least quarterly. Review outcomes include an affirmation of the information security policy, validation of the risk treatment plan, assessment of metrics against targets, and decisions on resource allocation and improvement actions. The minutes of the most recent management review, with redactions for confidential business matters, are available to customers under non-disclosure."},
-        {"h": "Certification body"},
-        {"p": "The certification body is accredited under the International Accreditation Forum's multilateral agreement for management system certification. Certificate verification is available through the accreditation body's public registry, and the service organization is listed as a certified client in good standing as of the date of this document."},
-        {"h": "Risk treatment plan overview"},
-        {"p": "The ISMS risk treatment plan catalogues information security risks identified through the risk assessment process and records the treatment decision for each. The treatment options — modification of the risk through additional controls, retention of the risk at its current level, sharing of the risk through transfer mechanisms such as insurance or contract, or avoidance of the activity giving rise to the risk — are selected based on the risk owner's judgement, the residual risk after the proposed treatment, and the cost of the treatment relative to the reduction in residual risk. Every treatment decision is recorded with a rationale, an owner, a due date for implementation, and a verification method."},
-        {"p": "Residual risks that exceed the organization's risk appetite are escalated to executive management for acceptance. As of the most recent management review, no residual risk in the register is being retained above the established risk appetite; all elevated residual risks have an active treatment action with a defined target date."},
-        {"h": "Control implementation highlights"},
-        {"p": "Annex A.5.15 (Access control) — access to the platform and its supporting systems is governed by a formal policy requiring unique identities for all users, MFA for any access to production or customer data, role-based entitlements derived from job function, and quarterly access reviews. Exceptions to the policy are registered, time-bound, and approved by the information security function. Workforce identity is managed through a single identity provider; deprovisioning on employment change is executed within 24 hours of the triggering event."},
-        {"p": "Annex A.8.24 (Use of cryptography) — cryptographic controls are implemented consistent with the organization's Cryptography Policy, which specifies approved algorithms, minimum key sizes, protocol versions, and key-management practices. The policy is reviewed annually against the guidance of authoritative bodies (NIST, IETF, national equivalents) and updated when recommended practices change. All data at rest and in transit within the in-scope boundary is encrypted with algorithms and parameters permitted by the Cryptography Policy."},
-        {"p": "Annex A.8.16 (Monitoring activities) — operational and security-relevant events are collected, correlated, and retained in a central SIEM platform. Detection rules address documented threat categories and are tuned through a rule-lifecycle process covering authoring, peer review, performance measurement, and retirement of stale rules. Alerts are triaged by a 24x7 security operations function with defined response times by severity."},
-        {"p": "Annex A.5.29 (Information security during disruption) — business continuity and disaster recovery arrangements ensure the platform meets its published recovery-time and recovery-point objectives in the event of regional or zonal disruption. Arrangements are exercised at least twice annually and updated on the basis of exercise outcomes and changes to the service architecture."},
-        {"h": "Nonconformities and corrective actions"},
-        {"p": "During the most recent annual surveillance audit, three minor nonconformities were raised by the external auditor. Corrective actions have been implemented and verified for all three: (1) the attendance record for one quarterly access review had been retained in an inconsistent location, corrected by consolidating retention to a single location of record; (2) one documented procedure had not been updated to reflect a tooling change, corrected by revising the procedure; (3) one risk owner had lapsed in reviewing an assigned risk within the required cadence, corrected by reassigning ownership and reinforcing the cadence through automated reminders. No major nonconformities were raised."},
-        {"h": "ISMS performance evaluation"},
-        {"p": "The effectiveness of the ISMS is evaluated against a defined set of metrics reviewed at each management review. Metrics cover access-control effectiveness (proportion of access reviews completed on schedule, mean time to revoke access on termination), incident response (mean time to detect, mean time to respond, mean time to resolve), change management (change failure rate, emergency change volume), and customer outcomes (customer-reported security events, customer audit observations requiring response). Trends in each metric are reported alongside targets, and material deviations trigger investigation."},
-        {"p": "The ISMS has met or exceeded all target metrics over the most recent reporting period, with the exception of one metric — mean time to detect for a specific class of internal-only event — which was below target in one quarter due to a sensor misconfiguration. The misconfiguration has been corrected and the metric returned to target in the subsequent quarter."},
+    "iso27018_attestation_2026": [
+        {"h": "Attestation of conformance"},
+        {"p": "This attests that the controls operated by the service organisation for the processing of personally identifiable information in public cloud have been assessed against ISO/IEC 27018:2019 and found to conform. The assessment was conducted alongside the ISO/IEC 27001:2022 surveillance activity in February 2026 by the same accredited certification body, and covers the same certified scope."},
+        {"h": "Why this standard, and what it adds"},
+        {"p": "ISO/IEC 27001 establishes the management system. ISO/IEC 27018 layers onto it a specific set of obligations for an organisation acting as a processor of personally identifiable information in public cloud. The obligations that customers most often ask about are the ones addressed below: processing only on documented instruction, restrictions on secondary use, disclosure of sub-processors, notification of law enforcement requests, and return or deletion of data at the end of the relationship."},
+        {"h": "Processing on documented instruction"},
+        {"p": "The service organisation processes personally identifiable information contained in message content and metadata solely to deliver the contracted service and solely on the documented instruction of the customer, as recorded in the Data Processing Agreement and the tenant's configured policy. There is no use of customer content for marketing, for product analytics, or for the training of machine learning models. Where the organisation is required by law to process outside the customer's instruction, that requirement is recorded and, unless prohibited, communicated to the customer."},
+        {"h": "Sub-processing and disclosure"},
+        {"p": "Sub-processors are disclosed in a published register that names each entity, the processing it performs, and the country in which that processing occurs. Customers are notified at least thirty days before a new sub-processor begins processing, and may object within that window under the terms of the Data Processing Agreement. Each sub-processor is bound by contractual terms no less protective than those the organisation owes its customers, and is reassessed annually."},
+        {"h": "Government and law enforcement access"},
+        {"p": "Requests from law enforcement or government for customer content are refused unless the request is legally binding on the organisation. Where a request is legally binding, the organisation seeks to redirect the requester to the customer. Where redirection fails and notification is not legally prohibited, the customer is notified before disclosure so that it may seek relief. The organisation publishes an aggregate transparency figure annually. Because message bodies at rest are encrypted under tenant key-encryption keys, a tenant holding its own root key material materially constrains what could be disclosed in response to any such request."},
+        {"h": "Residency and cross-border transfer"},
+        {"p": "Personally identifiable information is processed in the residency zone elected by the tenant at provisioning. Cross-border transfer occurs only where the tenant enables a feature that requires it, or where support access is granted on a per-session, named-approval basis. Transfers out of the European Economic Area rely on the 2021 Standard Contractual Clauses supplemented by a transfer impact assessment; transfers out of the United Kingdom rely on the International Data Transfer Addendum."},
+        {"h": "Return and deletion"},
+        {"p": "On termination, the customer may export its data through the documented export path for a period of thirty days. After that period, or immediately on written instruction, content is deleted. Deletion is confirmed in writing. Content held in backup images is rendered unrecoverable as those images age out of the retention window, which does not exceed thirty-five days; the confirmation of deletion states this explicitly rather than implying instantaneous erasure everywhere."},
     ],
-    "fedramp_status_2026": [
-        {"h": "FedRAMP Moderate — authorization progress report"},
-        {"p": "As of March 1, 2026, the service organization is pursuing FedRAMP Moderate authorization through the agency-sponsored Authority to Operate (ATO) path. This status document reflects the position at that date and is refreshed quarterly."},
-        {"h": "Current phase"},
-        {"p": "The authorization package is in the assessment phase. A Third-Party Assessment Organization (3PAO) meeting the requirements of NIST SP 800-37 has been engaged, and assessment work on the in-scope control set is underway. The System Security Plan (SSP), initial Security Assessment Plan (SAP), and the first round of evidence submissions have been completed; assessment testing is in progress."},
-        {"h": "Authorization boundary"},
-        {"p": "The authorization boundary as drawn in the current SSP comprises the GovCloud deployment of the SaaS platform in the AWS GovCloud (US) regions, operated logically separately from the commercial multi-tenant environment. Interconnections to AWS GovCloud services are documented with interconnection security agreements. The boundary is drawn to exclude corporate IT systems, commercial-tenant infrastructure, and any subservice organizations that do not themselves hold a FedRAMP authorization at the Moderate or higher impact level."},
-        {"h": "Control baseline"},
-        {"p": "The applicable control baseline is the FedRAMP Moderate baseline, which tailors NIST SP 800-53 Revision 5 to the cloud service context. Controls are implemented, inherited from AWS GovCloud (as documented in the customer responsibility matrix), or shared. Where controls are shared, the Customer Responsibility Matrix clarifies the division between provider and customer responsibility."},
-        {"h": "No committed authorization date"},
-        {"p": "The service organization does not publish a committed date for FedRAMP Moderate authorization. The authorization outcome and timeline are determined by the sponsoring agency's Authorizing Official based on the 3PAO's assessment and any remediation required. Customers requiring authorization by a specific date should contact their Account Executive to discuss timeline expectations and any interim compensating controls."},
-        {"h": "Interim posture for federal customers"},
-        {"p": "Federal and federal-adjacent customers evaluating the platform prior to authorization may request the In-Process SSP, the current 3PAO Readiness Assessment Report, and the Customer Responsibility Matrix under non-disclosure, through their Account Executive. These documents are not a substitute for authorization and do not confer the assurances that the FedRAMP Moderate ATO represents."},
-        {"h": "Continuous monitoring expectations"},
-        {"p": "Once authorized, the service organization will maintain the authorization through the FedRAMP continuous monitoring program. Continuous monitoring comprises monthly vulnerability scanning of in-scope components with results submitted to the sponsoring agency and, where applicable, to the FedRAMP PMO; annual assessment of a subset of controls on a three-year rotational basis so that all controls are reassessed at least once per authorization cycle; quarterly reporting on key security metrics; and prompt notification to the sponsoring agency of any significant change to the boundary, the threat landscape, or the control environment."},
-        {"p": "Plan of Action and Milestones (POA&M) items identified through continuous monitoring or any other source are tracked through remediation, with timelines consistent with the FedRAMP severity-based remediation deadlines (30 days for high-severity findings, 90 days for moderate, 180 days for low). POA&M status is reported to the sponsoring agency on the monthly cadence required by the program."},
-        {"h": "Incident response alignment"},
-        {"p": "The incident response program will align with the requirements of NIST SP 800-61 Rev. 2 and the reporting obligations of FedRAMP-authorized cloud service providers. In the event of a confirmed security incident affecting a federal customer's tenant, notification will be provided to the sponsoring agency's designated security point of contact and to US-CERT / CISA as required, within the timeframes mandated by FedRAMP and applicable federal guidance. Formal after-action reporting follows within 30 days of incident closure."},
-        {"h": "Subservice organizations within the authorization boundary"},
-        {"p": "The authorization boundary depends on Amazon Web Services GovCloud (US) as the infrastructure subservice organization. AWS GovCloud holds a FedRAMP High authorization, so the inheritable controls are consumed from that authorization rather than re-assessed for this boundary. The Customer Responsibility Matrix attached to the SSP documents every control, its inheritance posture (fully inherited, partially inherited, provider-implemented), and the provider and customer responsibilities where inheritance is partial. Other subservice organizations are evaluated on a case-by-case basis and are only included within the boundary if they themselves hold a FedRAMP authorization at the Moderate or higher impact level."},
-        {"h": "Relationship to commercial platform"},
-        {"p": "The GovCloud deployment within the FedRAMP Moderate boundary is a logically and operationally distinct instance from the commercial multi-tenant platform. Customer data does not cross between the two environments. The two environments do share platform engineering artifacts — for example, application code, container images, and the internal tooling used to deploy and operate the platform — which are assessed within the FedRAMP boundary and are deployed into the GovCloud environment through the documented change management process. Changes that are deployed into the GovCloud environment are subject to the FedRAMP significant-change evaluation before deployment; changes that affect only the commercial environment do not follow that evaluation."},
+    "pentest_exec_summary_2026": [
+        {"h": "Engagement summary"},
+        {"p": "An independent testing firm conducted a grey-box penetration test of the cloud email encryption service between 6 April 2026 and 24 April 2026. The engagement covered the internet-facing encryption gateway and its SMTP listeners, the recipient portal including its authentication and session handling, the tenant administration plane and its API, and the key management plane's externally reachable interfaces. Testers were provided with tenant administrator credentials for two purpose-built tenants and with architecture documentation, but not with source code."},
+        {"p": "The engagement was scoped as an annual assurance activity and was conducted under a signed rules-of-engagement document. Testing was performed against a dedicated pre-production environment configured to match production, with a controlled subset of tests replayed against production under supervision."},
+        {"h": "Findings summary"},
+        {"table": [
+            ["Ref", "Severity", "Finding", "Status"],
+            ["PT-2026-01", "Medium", "Recipient portal session cookie lacked the SameSite attribute on one legacy delivery path, permitting a cross-site request under a narrow set of browser conditions.", "Remediated and retested 21 Apr 2026"],
+            ["PT-2026-02", "Medium", "The administration API accepted an unbounded page-size parameter on the event export endpoint, allowing an authenticated administrator to exhaust worker capacity for that tenant.", "Remediated and retested 23 Apr 2026"],
+            ["PT-2026-03", "Low", "Verbose error response on a malformed S/MIME certificate disclosed the internal library version.", "Remediated and retested 21 Apr 2026"],
+            ["PT-2026-04", "Low", "Password reset response timing differed measurably between known and unknown recipient addresses.", "Remediated and retested 23 Apr 2026"],
+            ["PT-2026-05", "Low", "Content Security Policy on the portal permitted inline style attributes.", "Remediated and retested 24 Apr 2026"],
+            ["PT-2026-06", "Low", "One dependency in the gateway image was two patch releases behind, with no known exploitable path in this configuration.", "Remediated and retested 24 Apr 2026"],
+        ]},
+        {"h": "Findings not identified"},
+        {"p": "No critical or high-severity findings were identified. Specifically, the testers were unable to achieve cross-tenant access to message content, to recover plaintext message bodies from storage or from intercepted transport, to bypass the second-factor requirement on administrative sign-in, or to cause the policy engine to select a weaker delivery method than tenant policy permitted. Attempts to force fallback from enforced TLS to opportunistic TLS by manipulating partner-domain discovery were unsuccessful."},
+        {"h": "Remediation and retest"},
+        {"p": "All six findings were remediated and retested within the engagement window; the testing firm issued a clean retest letter dated 28 April 2026. The two medium findings were fixed within seven and nine days of report respectively, inside the thirty-day internal target for medium severity. The organisation's internal targets are seven days for critical, thirty days for high, ninety days for medium and best-effort for low, measured from report date to verified fix."},
+        {"h": "Availability of the full report"},
+        {"p": "This executive summary may be shared with prospective customers on request. The full technical report, including reproduction steps and the retest letter, is released under a mutual non-disclosure agreement through the account team. The organisation does not release the full report without a non-disclosure agreement in place, because reproduction steps for a fixed finding remain useful to an attacker against unpatched forks and integrations."},
+        {"h": "Supply chain assurance"},
+        {"p": "The engagement was complemented by the standing software supply chain controls: a signed CycloneDX software bill of materials is produced for every deployable artifact, dependency composition analysis runs on every change and nightly against the released set, and container images are scanned before promotion. The bill of materials for a given release is available to customers under non-disclosure and is the basis on which the organisation answers component-level vulnerability enquiries."},
+    ],
+    "soc2_type2_2024_expired": [
+        {"h": "SUPERSEDED — retained for history only"},
+        {"p": "This is the summary of the FY2024 SOC 2 Type II report. It has been superseded by the FY2026 report issued 15 June 2026 and must not be cited as current evidence of the control environment. It is retained so that a customer holding the FY2024 report on file can reconcile what has changed. Any answer that relies on this document without also citing the current report is wrong."},
+        {"h": "Report identification"},
+        {"p": "SOC 2 Type II report on the suitability of design and operating effectiveness of controls relevant to the Trust Services Criteria for Security and Availability. Report period 1 April 2023 to 31 March 2024. Issued 30 June 2024 by an independent CPA firm. The report was valid for reliance until 30 June 2025 under the customary twelve-month reliance convention."},
+        {"h": "Scope differences against the current report"},
+        {"p": "The FY2024 report differs from the FY2026 report in three material respects. First, Confidentiality was not in scope in FY2024; it was added in FY2026. Second, the tenant administration plane was assessed as a single component in FY2024, whereas FY2026 assesses the administration plane and the key management plane separately. Third, the recipient portal was in scope in both periods, but the interoperable gateway-to-gateway delivery path was introduced after the FY2024 period and is therefore covered only by the FY2026 report."},
+        {"h": "Control activities as tested in FY2024"},
+        {"table": [
+            ["Criterion", "Control activity", "Result"],
+            ["CC6.1", "Access to production requires federated sign-in with a second factor.", "No exceptions noted"],
+            ["CC6.7", "Message content at rest is encrypted with AES-256-GCM.", "No exceptions noted"],
+            ["CC7.2", "Security-relevant events are centralised and retained for 365 days.", "No exceptions noted"],
+            ["CC7.4", "Confirmed incidents affecting a tenant are notified within 72 hours of confirmation.", "No exceptions noted"],
+            ["A1.2", "Each residency zone is served from two regions.", "No exceptions noted"],
+        ]},
+        {"h": "Why this document is still in the corpus"},
+        {"p": "Superseded evidence is the single largest source of wrong questionnaire answers. Removing it from the corpus entirely would hide the problem rather than solve it: a reviewer who has the old report in their own files will still ask about it. It is retained here with an expiry already in the past so that the pipeline treats it as expired evidence, marks any citation of it accordingly, and prefers the current report against the same question."},
+    ],
+    "dpa_art28_subprocessors_2026": [
+        {"h": "Standard Data Processing Agreement"},
+        {"p": "The standard Data Processing Agreement is offered under Article 28 of Regulation (EU) 2016/679 and its United Kingdom equivalent. It is executed as an annex to the master agreement and does not require negotiation for the great majority of customers. Version 2026.05 was published on 20 May 2026 and is the version offered to all new and renewing customers."},
+        {"h": "Roles and instructions"},
+        {"p": "The customer is the controller and the service organisation is the processor in respect of personal data contained in message content, message metadata and administrative event records. The agreement records the subject matter, duration, nature and purpose of processing, the types of personal data and the categories of data subjects, in the form Article 28(3) requires. The organisation processes only on the customer's documented instruction, which comprises the agreement itself and the tenant configuration the customer sets."},
+        {"h": "Article 28(3) obligations"},
+        {"table": [
+            ["Article 28(3)", "Obligation", "Where addressed"],
+            ["(a)", "Process only on documented instruction, including for transfers.", "Clause 3, Clause 9"],
+            ["(b)", "Ensure persons authorised to process are bound by confidentiality.", "Clause 4"],
+            ["(c)", "Take measures required by Article 32.", "Clause 5 and Annex II"],
+            ["(d)", "Respect conditions for engaging another processor.", "Clause 6 and Annex III"],
+            ["(e)", "Assist the controller in responding to data subject requests.", "Clause 7"],
+            ["(f)", "Assist with Articles 32 to 36, including breach notification.", "Clause 8"],
+            ["(g)", "Delete or return personal data at the end of provision.", "Clause 10"],
+            ["(h)", "Make available information to demonstrate compliance and allow audits.", "Clause 11"],
+        ]},
+        {"h": "Sub-processor register, version 2026.05"},
+        {"table": [
+            ["Sub-processor", "Purpose", "Processing location"],
+            ["Fictitious infrastructure provider", "Compute, storage and network for the service", "Elected residency zone"],
+            ["Fictitious managed key service", "Storage and use of wrapped key material", "Elected residency zone"],
+            ["Fictitious observability provider", "Operational telemetry; no message content", "European Union"],
+            ["Fictitious transactional messaging provider", "Delivery of recipient notification messages", "European Union, United States"],
+            ["Fictitious support platform provider", "Support ticketing and correspondence", "European Union"],
+            ["Fictitious identity provider", "Workforce authentication for service personnel", "European Union"],
+        ]},
+        {"h": "Sub-processor change process"},
+        {"p": "The register is published and versioned. Customers may subscribe to change notifications. A new sub-processor is announced at least thirty days before it begins processing, and the announcement states the purpose and the processing location. A customer that objects on reasonable data protection grounds within the notice period may raise the objection under Clause 6; where the objection cannot be resolved, the customer may terminate the affected service without penalty for the remainder of the term."},
+        {"h": "International transfer"},
+        {"p": "Where personal data is transferred out of the European Economic Area, the 2021 Standard Contractual Clauses apply in the controller-to-processor module, supplemented by a transfer impact assessment which is available on request. Where personal data is transferred out of the United Kingdom, the International Data Transfer Addendum applies. Customers electing the European Union or United Kingdom residency zones and not enabling cross-zone features will not have message content transferred outside that zone in the ordinary operation of the service."},
+        {"h": "Assistance with data subject rights"},
+        {"p": "The organisation assists the controller with requests for access, rectification, erasure, restriction, portability and objection. In practice most such requests are satisfied by the controller directly through the tenant administration plane, which supports search and export scoped to a data subject and supports deletion. Where a request cannot be satisfied through the tenant plane, the organisation assists on request within the timescales the agreement sets."},
+        {"h": "Breach notification"},
+        {"p": "The organisation notifies the controller without undue delay and in any event within 72 hours of becoming aware of a personal data breach affecting that controller's personal data, providing the information Article 33(3) requires to the extent it is then available, and supplementing it as further information becomes available. The notification goes to the security contacts registered against the tenant."},
     ],
 }
 
+# ---------------------------------------------------------------------------
+# product-docs/ — long-form markdown. Chunked on "## " headings by the
+# retrieval stub in scripts/verify_fixture.py, and by Bedrock's default
+# chunking in the deployed path.
+# ---------------------------------------------------------------------------
+
 PRODUCT_DOCS_BODIES: dict[str, str] = {
-    "encryption_whitepaper": """# Encryption Architecture Whitepaper
+    "encryption_at_rest_aes256gcm": """# Encryption at Rest — AES-256-GCM Envelope Design
 
-## Overview
+## Scope of this document
 
-This whitepaper describes how the platform protects customer data at rest and in transit, the key management model, and the options available to Enterprise customers who wish to hold their own keys.
+This document describes how message bodies, attachments, message metadata and
+derived search indexes are protected while stored by the cloud email encryption
+service. It covers the algorithm and mode, the envelope structure, where each
+kind of key lives, and what an attacker who obtains stored ciphertext can and
+cannot do with it. Key rotation, bring-your-own-key and hardware security
+module options are described in the key management document; this document
+covers the data path.
 
-Three design principles underlie every decision in this document.
+## Algorithm and mode
 
-First: cryptography is a supporting control, not a primary one. Encryption closes specific residual-risk categories — physical theft of storage media, interception in transit, misconfigured bucket policies — but it does not substitute for access controls, network segmentation, identity hygiene, or operational security. Every decision below assumes the other controls are working.
+Data at rest is sealed with AES-256 in Galois/Counter Mode, written throughout
+as AES-256-GCM. Three properties drive that choice.
 
-Second: use well-reviewed primitives, standard protocols, and managed services wherever possible. Writing new cryptography is a known failure mode. Every algorithm and key length referenced in this document follows the recommendations of NIST SP 800-131A Revision 2 and the IETF at the time of writing.
+The mode is authenticated. GCM produces an authentication tag alongside the
+ciphertext, and decryption fails closed if the tag does not verify. Silent
+corruption of stored ciphertext, whether from a storage fault or from
+tampering, surfaces as a decryption failure rather than as plausible-looking
+garbage delivered to a recipient.
 
-Third: key management is the hard part. The cost of an encryption program is dominated by key lifecycle — generation, rotation, access control, audit, and recovery. Decisions about where keys live, who can access them, and how their use is logged matter more than the choice of algorithm.
+The key length is 256 bits. This is not because 128-bit AES is considered
+breakable, but because the symmetric margin is the cheapest margin available:
+the performance difference is small on modern hardware with AES-NI, and a
+256-bit symmetric key retains a 128-bit security level against the best known
+quantum search technique.
 
-## Data-at-rest encryption
+The nonce is 96 bits, generated from a cryptographically secure random source
+per encryption operation and stored alongside the ciphertext. Nonce reuse under
+the same key is catastrophic in GCM, so the design never reuses a data key
+across more messages than the birthday bound allows — in practice each message
+gets its own data key, which makes the question moot.
 
-All customer data stored in the platform is encrypted at rest using AES-256 in Galois/Counter Mode (AES-256-GCM), via AWS Key Management Service (KMS). AES-256-GCM is an authenticated encryption mode; it protects both the confidentiality and the integrity of the ciphertext, such that tampering with the ciphertext at rest will be detected on decryption.
+## Envelope structure
 
-Data is encrypted at the storage layer. For relational tenant data, encryption is applied by the database engine, using a data key derived from a KMS customer master key (CMK). For object storage, encryption is applied server-side by Amazon S3 (`x-amz-server-side-encryption: aws:kms`) using the same class of CMK. For block storage used by application compute, encryption is applied at the Amazon EBS layer.
+Each stored object carries an envelope with four parts: the AES-256-GCM
+ciphertext, the 96-bit nonce, the 128-bit authentication tag, and the wrapped
+data key. The wrapped data key is the data key itself, encrypted under the
+tenant key-encryption key held in the managed key service.
 
-Keys are never stored or cached in plaintext outside AWS KMS. Data keys generated from the CMK are used in-memory for the duration of a single encryption or decryption operation and then discarded. This design means that to decrypt any customer data, an attacker would need both access to the ciphertext and the ability to invoke `kms:Decrypt` on the controlling CMK — the latter gated by IAM policy, the KMS key policy, and the AWS CloudTrail audit log.
+The envelope is versioned. A version byte precedes the structure so that the
+algorithm, the mode or the envelope layout can be changed without a flag day:
+readers dispatch on the version, writers emit the current version, and a
+background re-wrapping process moves older envelopes forward. This matters more
+than it sounds. The common reason an organisation cannot move off a
+cryptographic primitive is not that the new primitive is hard, it is that the
+stored format has no version field and every reader must be changed at once.
 
-## Data-in-transit encryption
+## Where keys live and where they do not
 
-All data in transit is encrypted using TLS 1.2 or TLS 1.3. TLS 1.0 and TLS 1.1 are disabled at every entrypoint. The cipher suite allowlist requires Perfect Forward Secrecy, realized through ECDHE-based key exchange — which means that compromise of a long-term server private key does not retroactively compromise the session keys of past recorded traffic.
+Data keys exist in plaintext only inside process memory, only for the duration
+of a single encrypt or decrypt operation, and are zeroed after use. They are
+never written to disk in the clear, never logged, and never included in a
+diagnostic capture — the structured event pipeline redacts the field by schema
+rather than by pattern match, so a new field name cannot accidentally leak one.
 
-A short, intentionally conservative list of suites is accepted: TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256, TLS_AES_128_GCM_SHA256 (for TLS 1.3), and ECDHE-ECDSA/ECDHE-RSA with AES-GCM for TLS 1.2. All other suites are rejected at the load balancer.
+Tenant key-encryption keys never leave the managed key service. The service
+holds a handle, not the key. To decrypt anything, a process must be able to
+call the unwrap operation on the tenant's key-encryption key, and every such
+call is recorded by the key service independently of the platform's own event
+records.
 
-HTTP Strict Transport Security (HSTS) is advertised on all public HTTPS endpoints with a one-year `max-age` and the `includeSubDomains` directive. The apex domain and relevant subdomains are preloaded into the major browsers' HSTS preload lists. Mixed content is not served; an unencrypted request to any customer-facing endpoint is met with a 301 redirect to HTTPS followed by HSTS enforcement on subsequent requests.
+The practical consequence: an attacker who obtains a complete copy of stored
+objects — every ciphertext, every nonce, every tag, every wrapped data key —
+has no path to plaintext without also obtaining the ability to call the unwrap
+operation against the tenant's key-encryption key.
 
-Between internal services within the AWS network boundary, mTLS is used where the service-to-service communication crosses a trust boundary (for example, between the data plane and the control plane). Service identity is established through short-lived certificates issued from an internal private CA and rotated on the order of hours.
+## Separation by data class
 
-## Customer-managed keys (BYOK / HYOK)
+Four data classes are separated under distinct key-encryption keys within a
+tenant: message bodies and attachments, message metadata, derived search
+indexes, and event records. Separation costs little and buys two things. A
+policy change that restricts access to one class does not disturb the others.
+And the retention schedules differ per class, so the keys age out on different
+schedules without entangling them.
 
-Enterprise customers may opt to hold the root key controlling the encryption of their tenant's data. Two options are supported.
+Derived search indexes deserve a note. An index over encrypted content is a
+classic place where confidentiality leaks back out, because index structures
+reveal term frequency. The service does not build a plaintext inverted index
+over message bodies. Recipient-visible search operates on the metadata class —
+sender, recipients, subject where the tenant permits it, timestamps — and that
+class is sealed with the same envelope as everything else.
 
-Option 1 — customer CMK in the customer's AWS account. The customer creates a KMS CMK in their own AWS account, grants the platform's service principal a key policy permitting `kms:Encrypt`, `kms:Decrypt`, `kms:ReEncrypt*`, `kms:GenerateDataKey*`, and `kms:DescribeKey`, and provides the CMK ARN during tenant provisioning. The platform uses the customer's CMK to wrap tenant data keys. Because the key lives in the customer's account, the customer has full visibility of every use via CloudTrail, and can revoke access at any time by revoking the key policy statement. Revoking key access has an immediate effect: in-flight operations fail, and all subsequent reads of encrypted data return an authorization error from KMS until access is restored.
+## Storage-layer redundancy
 
-Option 2 — external key material via AWS KMS External Key Store (XKS). For customers with a regulatory or policy requirement that the key material never reside within AWS, the platform supports CMKs backed by an External Key Store, where the root key material lives in a customer-controlled HSM accessible to AWS KMS through a documented interface. All the same KMS operations apply, with the difference that the underlying cryptographic operations occur within the customer's HSM.
+Sealing happens before the object reaches storage, so every replica of every
+object is sealed. Replication between regions inside a residency zone moves
+ciphertext, not plaintext; the receiving region has no more access to the
+plaintext than the network in between does. Backup images are taken of the
+sealed objects. There is no point in the storage path where an object exists in
+the clear.
 
-In both options, the customer retains the cryptographic lever: revoking access to the root key renders tenant data unreadable. This is by design.
+## What this control does not do
 
-## Key rotation
-
-KMS CMKs under the platform's management are rotated annually by default. Rotation is automatic, transparent, and does not require re-encryption of existing ciphertext — KMS retains access to prior key versions for decryption purposes. Customers holding their own CMKs may rotate on any cadence permissible to their policy; rotation events in the customer's account are reflected automatically through the KMS data-key derivation protocol.
-
-On-demand rotation is supported for all CMK types. A customer-initiated rotation request is processed within minutes and is visible in both the customer's audit log and the platform's audit log.
-
-## Cryptographic hygiene at the edges
-
-Beyond bulk encryption, the platform follows a short list of hygiene practices that close common failure modes. All password hashes are stored using Argon2id with parameters tuned to 500 ms of work on production hardware. All session tokens are opaque, 256-bit random values issued through a cryptographically secure RNG, transmitted only over TLS, and invalidated on logout. API keys for machine-to-machine access are scoped to the minimum set of operations required and are revocable individually from the customer's administrative console. Cryptographic configuration is reviewed at the start of each year against the then-current guidance from NIST and the IETF; algorithms or parameter choices that have fallen out of the recommended set are deprecated on a published schedule.
-
-## Cryptographic agility
-
-A recurring failure mode in long-lived systems is the inability to migrate away from an algorithm, a protocol version, or a key size once it has been deprecated by the cryptographic community. The platform's data-at-rest and data-in-transit stacks are built to support migration.
-
-Data-at-rest keys are referenced by CMK identifier rather than by inlined key material. Replacing a CMK with one using a different algorithm requires only a re-encryption of the affected data keys — a background operation that does not require downtime or re-transmission of customer data. Re-encryption operations are rate-limited to respect KMS request budgets, instrumented with progress reporting, and resumable from partial-failure states.
-
-Data-in-transit protocol versions and cipher suite lists are surfaced as configuration, not code. A change to the supported protocol versions propagates through the load-balancer fleet in under an hour and is reversible by a single configuration rollback. Protocol deprecation follows a published schedule announced to customers at least 90 days in advance.
-
-## Post-quantum posture
-
-The platform is actively tracking the transition to post-quantum cryptography. The current posture reflects three principles.
-
-First: store-now-decrypt-later is a real risk for long-term confidential data. Traffic intercepted today may be decrypted in the future by an adversary that acquires a cryptographically-relevant quantum computer. The platform's TLS configuration is in the process of adding hybrid key exchange (combining a classical algorithm with a post-quantum key-encapsulation mechanism) for customer-facing endpoints, providing forward protection against store-now-decrypt-later adversaries.
-
-Second: post-quantum primitives are younger than classical primitives. A conservative migration path pairs each post-quantum primitive with a classical primitive (the "hybrid" approach) so that a flaw in either primitive alone does not compromise the protected data. The industry is converging on this pattern for the transition period.
-
-Third: symmetric primitives and hash functions are less affected by the quantum threat than public-key cryptography. AES-256 is considered secure against Grover's algorithm at the 128-bit post-quantum security level; SHA-256 is similarly considered secure. The platform's data-at-rest encryption does not require migration on the post-quantum transition timeline; the focus is on key exchange, digital signatures, and certificate infrastructure.
-
-## Key separation by data class
-
-Different classes of customer data use different CMKs, enabling per-class access control and per-class rotation. Relational tenant data, object-storage tenant data, backups, and audit logs each use a distinct CMK. This separation means that a policy or access-control event on one key — for example, revoking access to backups — does not affect the others. The separation also aligns with the different retention policies across classes: audit log CMKs are retained longer than tenant-data CMKs to support the extended retention of audit logs.
-
-Cross-account key use, for the Enterprise BYOK path, follows the same separation pattern: a customer's own CMK controls one class of data. Customers may elect to bring their own key for one class (say, object storage) while relying on the platform's CMK for other classes. The tenant configuration records which classes are under customer-held keys, and the access-and-use story is consistent across classes.
-
-## Key compromise and incident response
-
-In the hypothetical event of a confirmed key compromise, the response playbook comprises: (1) rotate the affected CMK to a new key version and force re-derivation of all dependent data keys; (2) identify the window of potential exposure from KMS CloudTrail logs and incident evidence; (3) re-encrypt affected ciphertext under the new key version; (4) notify affected customers within the notification timelines specified in the relevant customer contract, no later than 72 hours from confirmation. The playbook is rehearsed in the regular tabletop exercise program and updated as the key-management architecture evolves.
+Encryption at rest closes a specific set of exposures: theft of storage media,
+recovery of decommissioned hardware, an infrastructure-level misconfiguration
+that exposes an object store, and a backup image that ends up somewhere it
+should not. It does not defend against an attacker who has obtained a valid
+tenant session, a service process that is entitled to unwrap the data key and
+has been compromised, or a recipient who forwards a decrypted message onward.
+Those exposures are addressed by access control, workload isolation and
+delivery policy, described in their own documents. Stating the boundary
+plainly is more useful to a reviewer than implying that one control covers
+everything.
 """,
-    "sso_mfa_guide": """# Single Sign-On and Multi-Factor Authentication Integration Guide
+    "encryption_in_transit_tls": """# Encryption in Transit — TLS Profile and SMTP Delivery
 
-## Overview
+## Scope of this document
 
-This guide describes how to integrate a customer's identity provider (IdP) with the platform for workforce single sign-on and multi-factor authentication, and how automated user provisioning and deprovisioning is handled via SCIM.
+Two distinct transport problems live under the heading "encryption in transit"
+for an email encryption service, and conflating them produces confused
+answers. The first is the ordinary web and API transport between a client and
+the service. The second is message delivery over SMTP to a recipient's mail
+infrastructure, which the service does not control. This document covers both,
+in that order.
 
-The integration story rests on three standard protocols — SAML 2.0, OpenID Connect (OIDC), and SCIM 2.0 — and a small number of platform-specific conventions that align with common enterprise IdPs such as Okta, Microsoft Entra ID, Ping Identity, OneLogin, and Google Workspace.
+## Web and API transport
 
-## SAML 2.0 integration
+Every externally reachable listener requires TLS 1.2 or TLS 1.3. TLS 1.0 and
+TLS 1.1 are refused, not merely deprioritised: a client offering only those
+versions receives a handshake failure. SSL 3.0 and earlier have not been
+accepted for many years.
 
-SAML 2.0 is the default protocol for customer-initiated workforce SSO into the platform. The platform acts as a SAML Service Provider (SP); the customer's IdP is the Identity Provider.
+The accepted cipher suite list is short and forward-secret only. Under TLS 1.3
+the service accepts TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256 and
+TLS_AES_128_GCM_SHA256. Under TLS 1.2 it accepts ECDHE key exchange with ECDSA
+or RSA authentication and an AEAD bulk cipher — the AES-GCM and
+ChaCha20-Poly1305 families. Static RSA key exchange, CBC-mode suites and
+anything without forward secrecy are absent from the list. The consequence of
+requiring forward secrecy is that recorded traffic does not become readable
+later if a long-term server private key is compromised.
 
-To configure SAML SSO, an administrator in the customer's tenant generates the SP metadata from the Administrative Console, providing an Entity ID, Assertion Consumer Service URL, and signing certificate. The administrator then uploads the corresponding IdP metadata (typically as an XML document or via a metadata URL), maps attributes, and enables the integration.
+HTTP Strict Transport Security is asserted on every public web endpoint with a
+one-year max-age and the includeSubDomains directive, and the relevant domains
+are on the browser preload lists. A plaintext request to a customer-facing
+endpoint receives a redirect, and every subsequent request from that browser is
+upgraded before it leaves the client.
 
-The platform requires the following attributes on every SAML assertion: a NameID in the form of the user's primary email address (the IdP's email domain must match the verified domain registered against the tenant), a GivenName, a FamilyName, and optionally a set of Group memberships that will drive role mapping on the platform.
+Certificates are issued from a public certification authority with certificate
+transparency logging, use ECDSA P-256 keys, and are renewed automatically well
+ahead of expiry. Renewal failure is alerted on days before it could become
+customer-visible, because an expired certificate is one of the few failures
+that takes an otherwise healthy service completely offline.
 
-Assertion signing is required. Assertion encryption is supported and may be enabled by policy; when enabled, the IdP encrypts the assertion to the SP's published encryption certificate. Signed and encrypted assertions are validated before any application session is created.
+## Service-to-service transport
 
-## OIDC integration
+Inside the service boundary, connections between components use mutual TLS.
+Workload identity is established by short-lived certificates issued from an
+internal private certification authority, with lifetimes measured in hours and
+automatic renewal. A component presents its own certificate and validates its
+peer's, so a process that has somehow obtained network reachability to an
+internal endpoint still cannot talk to it without a valid workload identity.
 
-OpenID Connect is supported for customer-initiated SSO as an alternative to SAML, and is required for the platform's native integrations (desktop and mobile clients) where OAuth 2.0 Authorization Code flow with PKCE is used.
+## SMTP delivery to recipient infrastructure
 
-The platform supports the Authorization Code, Implicit, and Refresh Token flows. The Authorization Code flow with PKCE is the recommended pattern for new integrations; the Implicit flow is supported only for legacy single-page applications and will be deprecated in a future release.
+This is where the honest answer is more complicated than the one a
+questionnaire usually invites.
 
-Tokens are validated against the IdP's JSON Web Key Set (JWKS), with a maximum clock skew of 60 seconds. Access tokens carry a 1-hour lifetime by default, configurable down to 5 minutes for high-assurance contexts; refresh tokens carry a 14-day lifetime and are subject to rotation and revocation on every use.
+Ordinary SMTP negotiates TLS opportunistically. A sending server offers
+STARTTLS, and if the receiving server does not support it, the message is
+delivered in the clear. Opportunistic TLS is also downgradable by an active
+network attacker who strips the STARTTLS advertisement. So "we use TLS for
+email" is, on its own, a weak statement about email.
 
-## SCIM 2.0 provisioning
+The service therefore supports three stronger positions, selectable by the
+tenant per partner domain.
 
-SCIM 2.0 is supported for automated user and group lifecycle management. The platform exposes a SCIM endpoint per tenant, authenticated via a long-lived bearer token issued to the customer's IdP.
+Enforced TLS requires a successful TLS negotiation with a validated
+certificate for the named partner domain. If negotiation fails or validation
+fails, the message is not delivered in the clear — it is queued, and if the
+condition persists it falls back to the tenant's configured alternative method
+rather than to plaintext.
 
-Supported operations include create, update, deactivate, and reactivate for users, as well as create, update, and delete for groups (with membership changes reflected through `PATCH` operations on the group resource). Deactivation has an immediate effect: the user's active sessions are terminated, outstanding access tokens are revoked, and no new sessions may be established until reactivation.
+MTA-STS publishes and consumes policy over HTTPS so that a sending server
+learns, out of band, that a receiving domain requires TLS. This closes the
+STARTTLS-stripping downgrade for domains that publish a policy. The service
+publishes its own MTA-STS policy in enforce mode and honours published policies
+on outbound delivery.
 
-The platform reconciles SCIM data against its own tenant membership at each operation. Conflicts (for example, a duplicate email address across two SCIM-provisioned tenants) are reported via the standard SCIM error responses and logged for the customer's review.
+DANE uses DNSSEC-signed TLSA records to bind the expected certificate to the
+receiving host, which closes the same downgrade for domains that have deployed
+DNSSEC. The service validates TLSA records on outbound delivery where they are
+present and DNSSEC validates.
 
-## Multi-factor authentication
+## When transport security is not enough
 
-Multi-factor authentication is supported for all user tiers and can be enforced by administrator policy. A tenant administrator can require MFA for all users, for a subset of users based on role, or for users with specific privileges (for example, administrators or users with access to exportable audit data).
+Transport protects the hop. It does not protect the message once it lands. A
+message delivered over enforced TLS into a recipient mailbox sits in that
+mailbox in whatever state the recipient's own infrastructure keeps it.
 
-The following factors are supported:
+Where the tenant's policy requires protection beyond the hop, the policy engine
+selects a message-level method instead: S/MIME or OpenPGP where the recipient
+publishes a usable certificate or key, or delivery into the recipient portal
+where no interoperable path exists. The selection is a per-domain policy
+decision the tenant administrator makes, not a per-message guess, and the
+decision taken for each message is recorded in the delivery event stream.
 
-- Time-based one-time passwords (TOTP), compatible with RFC 6238 authenticator applications such as Google Authenticator, Microsoft Authenticator, 1Password, and Authy.
-- WebAuthn / FIDO2 security keys, including roaming authenticators (for example, YubiKey) and platform authenticators (Windows Hello, Touch ID, Android biometric sensors).
-- SMS-delivered one-time codes — supported for compatibility and as a fallback option, but not recommended for high-assurance contexts due to well-documented susceptibility to SIM-swap and SS7-interception attacks.
+## Reporting and verification
 
-For administrative roles in the Enterprise tier, hardware-backed MFA (WebAuthn or FIDO2) is required; TOTP and SMS are not accepted for these roles regardless of user preference. This reflects the expectation that administrative actions represent the highest impact in a tenant's security posture.
+The service publishes SMTP TLS Reporting endpoints and consumes reports for its
+own domains, so a partner's failure to negotiate is visible rather than silent.
+Tenant administrators see, per partner domain, the negotiated version, the
+selected suite and the validation outcome for delivery attempts. A reviewer who
+wants to verify the external position independently can inspect the published
+MTA-STS policy and the TLSA records directly.
+""",
+    "key_management_byok_hsm": """# Key Management — Hierarchy, Rotation, BYOK and HSM Options
 
-## Session management
+## Scope of this document
 
-Session lifetimes are governed by tenant policy with platform-enforced upper bounds. The default session lifetime for workforce users is 8 hours, configurable to as short as 15 minutes. Idle timeout defaults to 30 minutes, configurable down to 5 minutes.
+Key management is where most of the real work in an encryption programme sits.
+The algorithm choice is settled and uncontroversial; what varies between
+providers, and what a security reviewer should press on, is where key material
+lives, who can cause it to be used, how its use is recorded, and what happens
+when the customer wants it destroyed. This document answers those questions.
 
-Administrative sessions carry a reduced maximum lifetime — 4 hours by default, regardless of policy setting — and require step-up reauthentication for high-impact operations such as creating an API key, modifying an SSO configuration, or exporting audit data.
+## The key hierarchy
 
-## Troubleshooting
+There are three levels.
 
-The SSO configuration page in the Administrative Console includes a signed-assertion test tool that allows an administrator to dry-run a SAML assertion from the IdP against the platform's SP configuration without creating a user session. OIDC configurations may be tested via the corresponding OIDC dry-run tool. Both tools produce a detailed error report when validation fails, without exposing the contents of valid assertions for inspection.
+A per-message data key seals one message envelope with AES-256-GCM. It is
+generated per message from a cryptographically secure random source, exists in
+plaintext only in process memory for the duration of a single operation, and is
+stored only in wrapped form alongside the ciphertext it sealed.
 
-Configuration drift — for example, a signing certificate that has expired, or an attribute mapping that has silently changed — is the most common cause of SSO failure observed across tenants. Customers are advised to monitor the platform's configuration change log, which records every modification to the SSO configuration with the identity of the administrator and the timestamp, and to review expiring-certificate notifications that the platform emits 60, 30, and 7 days in advance of the expiry date.
+A per-tenant key-encryption key wraps that tenant's data keys. It lives in a
+managed key service and is never exported. Every wrap and unwrap operation
+against it is recorded by the key service.
 
-## Group-to-role mapping
+A root key protects the key-encryption keys. Where the tenant elects the
+default, the root key is held by the service in a managed key service. Where
+the tenant elects to bring its own, the root key is held by the tenant, and the
+following sections describe what that changes.
 
-Platform roles are derived from group memberships asserted by the IdP. A tenant administrator defines the mapping from IdP groups to platform roles in the Administrative Console; the mapping is evaluated on every session establishment, so changes in group membership at the IdP are reflected on the user's next login.
+Four key-encryption keys exist per tenant, one for each data class: message
+bodies and attachments, message metadata, derived indexes, and event records. A
+tenant may bring its own key for one class and leave the others under the
+default arrangement.
 
-Three mapping styles are supported. Direct mapping — one IdP group maps to one platform role — is the simplest and is recommended for most tenants. Hierarchical mapping allows a group to inherit the permissions of another group, with circular inheritance detected and rejected at configuration time. Expression-based mapping supports a constrained expression language that allows conditions on the user's attributes (for example, "map to the `finance_analyst` role if the IdP asserts department=Finance and costCenter=1200"). Expression-based mapping trades flexibility for inspectability; we recommend direct mapping wherever the IdP's group model can support it.
+## Rotation
 
-Users who belong to multiple groups receive the union of the permissions conferred by each mapped role, subject to any deny rules configured at the tenant level. A user who belongs to no mapped group at the time of session establishment is denied access and is redirected to an administrator-configured error page, typically pointing the user at the tenant administrator for remediation.
+The default rotation period for a key-encryption key is 365 days. Rotation
+generates a new key version, marks it current for new wrap operations, and
+retains prior versions for unwrap. Existing envelopes are not rewritten at
+rotation time — a stored envelope names the key version that wrapped it, and
+unwrapping an older envelope uses the version it names. This is what makes
+rotation cheap enough to actually happen on schedule.
 
-## Just-in-time provisioning
+A tenant administrator may trigger rotation on demand from the tenant
+administration plane, or through the administration API. On-demand rotation
+takes effect within minutes and appears in the tenant's event stream. There is
+no limit on how often a tenant may rotate, and no charge attached to doing so.
 
-For tenants that prefer not to operate SCIM, the platform supports just-in-time (JIT) user provisioning on the first successful SSO. On JIT, the platform creates a user record from the asserted attributes, assigns the roles implied by the group-to-role mapping, and establishes the application session. On subsequent logins, the attributes and group memberships are refreshed from the latest assertion.
+A background re-wrapping process moves envelopes forward onto the current key
+version over time, so that retiring an old version eventually becomes possible.
+Re-wrapping is rate-limited, resumable, and reports progress per tenant. A
+tenant that needs every envelope moved onto a new version within a bounded
+window — after a suspected compromise, for example — can request that the
+re-wrap be prioritised, and progress is visible while it runs.
 
-JIT provisioning and SCIM are mutually exclusive on a per-tenant basis: a tenant elects one or the other at integration time. JIT is simpler to configure but provides weaker guarantees — for example, deactivation in the IdP does not propagate to the platform until the user next attempts to log in (and is denied because they are no longer in a mapped group), or until a lifecycle sweep runs on the scheduled cadence. SCIM provides immediate propagation of lifecycle events through the IdP's provisioning engine, at the cost of configuring and maintaining the SCIM connection.
+Data keys are not rotated, because each one is used exactly once.
+
+## Bring your own key
+
+Two arrangements are offered, and they differ in where the root key material
+physically resides.
+
+The first arrangement places a customer-managed key in the customer's own
+account with the managed key service. The customer creates the key, grants the
+service's workload identity permission to perform wrap, unwrap and describe
+operations against it, and supplies the key identifier at tenant provisioning
+or later through the administration plane. Two consequences follow. The
+customer sees every use of its key in its own key service records, independent
+of anything the platform reports. And the customer can revoke the grant
+unilaterally at any moment, which takes effect immediately: in-flight
+operations fail, and every subsequent read of sealed content returns an
+authorisation error from the key service until the grant is restored.
+
+The second arrangement uses an external key store, where root key material
+resides in a hardware security module the customer operates, and the managed
+key service reaches it over a documented interface. The cryptographic
+operations occur inside the customer's hardware security module. This suits
+organisations whose own policy or regulator requires that root key material
+never reside in a cloud provider's custody at all.
+
+## Hardware security module options
+
+Three postures are available. Under the default, key-encryption keys are held
+in the managed key service's shared, validated hardware backing. Under the
+dedicated posture, the tenant is assigned an isolated hardware partition, not
+shared with other tenants. Under the external posture described above, the
+hardware belongs to the customer and sits outside the service boundary
+entirely.
+
+The dedicated and external postures are elected at provisioning and can be
+changed later, though changing them requires a re-wrap of the affected key
+hierarchy and is coordinated with the account team rather than being a
+self-service toggle.
+
+## Revocation, destruction and the shape of the guarantee
+
+The customer holding root key material holds a real lever, and it is worth
+stating exactly what that lever does and does not do.
+
+Revoking the grant makes sealed content unreadable for as long as the
+revocation stands. It is reversible. Nothing is destroyed.
+
+Scheduling destruction of the root key is not reversible once the scheduled
+window elapses. After destruction, sealed content protected under that key is
+unrecoverable by the customer and by the service alike. This is the property
+the arrangement exists to provide, and it is also the reason destruction runs
+on a mandatory waiting period rather than taking effect on the button press.
+
+Neither operation reaches backward through copies the customer has already
+exported, forwarded messages already delivered in the clear to a recipient
+under a tenant policy that permitted it, or plaintext a recipient has saved
+elsewhere. A reviewer should read the guarantee as covering content held by the
+service, which is what it covers.
+
+## Recording of key use
+
+Every wrap and unwrap operation is recorded twice: once by the key service, and
+once in the tenant's own exportable event stream. The two records are produced
+by different systems, which is the point — a discrepancy between them is
+detectable. Records name the workload identity that performed the operation,
+the key version, the tenant, the data class and the outcome. They do not
+contain key material or plaintext.
+""",
+    "sso_saml_oidc": """# Single Sign-On — SAML 2.0 and OpenID Connect
+
+## Scope of this document
+
+The service federates sign-in for two distinct populations, and reviewers
+frequently conflate them. Tenant administrators and internal senders are the
+customer's own workforce, and they federate against the customer's identity
+provider. Message recipients are, by definition, outside the customer's
+identity provider, and their authentication is covered separately in the
+recipient portal documentation. This document covers workforce federation.
+
+## SAML 2.0
+
+SAML 2.0 is the default protocol for workforce federation. The service acts as
+a service provider; the customer's identity provider issues assertions.
+
+Configuration is self-service from the tenant administration plane. The
+administrator downloads the service provider metadata, which contains the
+entity identifier, the assertion consumer service endpoint and the signing and
+encryption certificates. The administrator then supplies identity provider
+metadata, either as an uploaded document or as a metadata URL the service
+refreshes periodically. Supplying a metadata URL is strongly preferred: it lets
+a signing certificate rollover at the identity provider propagate without
+anyone remembering to update the tenant, which is the single most common cause
+of a federation outage.
+
+Assertions must be signed. Assertion encryption is optional and, when enabled,
+uses the published encryption certificate. Signature validation, audience
+restriction, recipient and destination checks, and the NotBefore and
+NotOnOrAfter conditions are all enforced before any session is established.
+Clock skew tolerance is sixty seconds and is not configurable upward.
+
+Required attributes are a name identifier carrying the user's primary email
+address in a domain verified against the tenant, a given name and a family
+name. Group membership claims are optional and drive role assignment.
+
+Both identity-provider-initiated and service-provider-initiated flows are
+supported. RelayState is validated against an allowlist of tenant-owned
+destinations so that a federated sign-in cannot be used to redirect a user to
+an arbitrary location.
+
+## OpenID Connect
+
+OpenID Connect is supported as an alternative for workforce federation and is
+the protocol used by the desktop and mobile clients, which run the
+authorisation code flow with PKCE.
+
+Supported flows are authorisation code and authorisation code with PKCE, plus
+refresh. The implicit flow is not supported for new configurations. Identity
+tokens are validated against the identity provider's published key set, with
+issuer, audience, nonce and expiry all checked, and sixty seconds of clock skew
+tolerance. Key sets are refreshed on a schedule and on an unknown key
+identifier, which lets a provider rotate signing keys without coordination.
+
+Access tokens issued by the service carry a one-hour lifetime by default,
+reducible to five minutes by tenant policy. Refresh tokens carry a fourteen-day
+lifetime, are rotated on every use, and a replayed refresh token invalidates
+the whole chain — which turns a stolen refresh token into a detectable event
+rather than a silent persistent foothold.
+
+## Group to role mapping
+
+Roles inside the tenant derive from group claims asserted by the identity
+provider. The administrator defines the mapping, which is evaluated at every
+session establishment, so a change of group membership at the identity provider
+takes effect on the user's next sign-in rather than at some later
+reconciliation.
+
+Direct mapping — one claimed group to one tenant role — is the recommended
+style and covers most tenants. Hierarchical mapping lets one role inherit
+another's permissions, with circular inheritance rejected when the mapping is
+saved rather than at evaluation time. A user in several mapped groups receives
+the union of the permissions, less any deny rule configured at the tenant
+level. A user in no mapped group is denied and shown an administrator-supplied
+message rather than a generic error.
 
 ## Break-glass access
 
-Every tenant maintains a break-glass account, independent of the primary SSO configuration, to provide continuity in the event of an IdP outage or misconfiguration. The break-glass account authenticates with a strong password and a hardware-backed MFA factor, is issued to a named administrator, and is subject to heightened monitoring — every authentication with the break-glass account generates a real-time notification to the tenant's security contact list.
+Every tenant keeps one break-glass account that does not depend on the
+federation configuration, so that an identity provider outage or a broken
+federation configuration does not lock the customer out of its own tenant. The
+break-glass account uses a strong password and a hardware-backed second factor,
+is issued to a named individual, and every sign-in with it raises an immediate
+notification to the tenant's registered security contacts.
 
-Break-glass accounts are not intended for routine use. The platform emits a reminder notification quarterly if a tenant's break-glass account has not been exercised in the preceding 90 days, prompting the administrator to complete a short recovery drill (log in, verify access, log out) so that the credentials remain usable when needed.
+The service reminds the tenant quarterly if the break-glass account has not
+been exercised in ninety days, because a break-glass credential that has never
+been tested tends not to work on the day it is needed.
 
-## Step-up authentication for sensitive operations
+## Migration between identity providers
 
-Certain operations — creating or revoking an API key, modifying the SSO configuration itself, exporting audit data for a date range exceeding 30 days — require step-up authentication even within an existing session. Step-up authentication prompts the user to re-present an MFA factor within the last 5 minutes of wall-clock time. The requirement holds regardless of the user's role; a tenant administrator who has been signed in for the last six hours will be prompted for MFA before creating a new API key.
+Moving from one identity provider to another runs as a dual configuration. The
+new configuration is added alongside the existing one; both are live for a
+transition window the administrator sets, typically thirty to ninety days;
+users are admitted through either; and the old configuration is removed once
+the event records show no sessions being established through it. Each session
+record names the configuration that established it, so migration progress is
+observable rather than guessed at.
 
-Step-up is implemented through the IdP where the IdP supports the `acr_values` parameter of OIDC or the `AuthnContextClassRef` element of SAML. For IdPs that do not support explicit step-up, the platform enforces the requirement through its own secondary MFA challenge.
+## Diagnosing a broken configuration
 
-## Migration scenarios
-
-Migrating SSO from one IdP to another — for example, because of a corporate acquisition — follows a dual-provider pattern. A new SAML or OIDC configuration is added alongside the existing one; users are granted access through either configuration for a defined transition window; the old configuration is disabled after verification that all active users have been migrated. The transition window is bounded by the tenant administrator's policy, typically between 30 and 90 days.
-
-During the transition, audit logs record the configuration under which each session was established, so that the administrator has full visibility into migration progress. After the transition, the configuration change log retains the history of the migration for the audit retention period.
+The administration plane includes a dry-run tool that validates an assertion or
+an identity token against the tenant's configuration without creating a
+session, and reports precisely which check failed. Configuration drift — an
+expired signing certificate, a changed attribute name, a renamed group — causes
+the large majority of federation failures. The service emits notifications
+sixty, thirty and seven days before a configured certificate expires, and
+records every change to the federation configuration with the identity of the
+administrator who made it and the time it took effect.
 """,
-    "dr_bcp_overview": """# Disaster Recovery and Business Continuity Overview
+    "mfa_factors_policy": """# Multi-Factor Authentication — Supported Factors and Policy
 
-## Scope
+## Scope of this document
 
-This document describes the disaster recovery (DR) and business continuity (BC) posture for the multi-tenant SaaS platform, including the deployment topology, replication strategy, recovery objectives, exercise cadence, and backup policy. It is intended for customer procurement, compliance, and risk teams who need to assess the platform's resilience against planned unavailability, regional failures, and data loss scenarios.
+This document covers the second factor for workforce sign-in to the tenant:
+which factors are available, how policy selects between them, how step-up works
+for sensitive operations, and how enrolment and recovery are handled. Where the
+tenant federates to its own identity provider, the second factor may be
+enforced there instead, and the interaction between the two is described below.
 
-## Deployment topology
+## Supported factors
 
-The platform is deployed active-active across two AWS regions, us-east-1 (Northern Virginia) and us-west-2 (Oregon). Each region is a full deployment, able to serve customer traffic independently. Customer traffic is routed by a globally-scoped DNS service with latency-based routing policy, with the ability to shift traffic to a single region on demand in under two minutes for any reason — planned maintenance, elevated error rates from a region, or a formally declared regional event.
+Four factor types are available.
 
-Within each region, the platform runs across three Availability Zones (AZs) with every stateful service replicated across a minimum of two AZs. Stateless services autoscale independently within each AZ. Load balancing within a region is handled by Application Load Balancers with cross-zone load balancing enabled.
+WebAuthn and FIDO2, covering both roaming authenticators such as security keys
+and platform authenticators such as a laptop's biometric sensor. This is the
+recommended factor and the only one that is phishing-resistant, because the
+assertion is bound to the origin and a credential presented to a lookalike
+domain simply does not verify.
 
-## Replication strategy
+Time-based one-time passwords per RFC 6238, compatible with any standard
+authenticator application. Widely supported and easy to enrol, but
+phishing-relayable: a user can be persuaded to read a code into an attacker's
+prompt.
 
-Replication is chosen per data class to balance recovery-point objective (RPO) against operational cost and complexity.
+Push approval through the service's mobile client, with number matching. The
+number-matching requirement exists to defeat approval fatigue — a user cannot
+approve by reflex, because approving requires reading a number from the screen
+they initiated the sign-in on.
 
-Critical metadata — tenant configuration, identity, authorization state, encryption key references — is replicated synchronously across regions. Writes to this data class do not acknowledge success until the write has been committed in both regions. The tradeoff is higher per-write latency; the benefit is a zero-data-loss RPO for the most sensitive state.
+One-time codes delivered by short message service. Available for compatibility
+and as a recovery path. This factor is the weakest of the four and is
+documented as such: subscriber identity module transfer attacks and signalling
+network interception are both well established. Tenant policy may disable it
+entirely, and many tenants do.
 
-Bulk customer data — application data, uploaded content, generated artifacts — is replicated asynchronously across regions with a target lag under 60 seconds. Asynchronous replication means that in a sudden regional loss, up to approximately 60 seconds of the most recent writes may be unrecoverable; the architecture accepts this tradeoff for the cost and latency benefit.
+## Policy
 
-Logs and audit trails are forwarded in near-real-time to a centralized long-term storage tier and are retained according to the platform's logging retention policy (13 months for security-relevant logs, longer for specific audit categories).
+Tenant policy determines who must present a second factor and which factors are
+acceptable. Policy can require a second factor for every sign-in, for
+administrative roles only, or only for step-up on sensitive operations. It can
+restrict the acceptable factor set — for example, permitting only WebAuthn for
+users holding administrative roles while allowing the broader set for ordinary
+senders.
 
-## Recovery objectives
+Where a role can read message content or change delivery policy, the service
+requires a phishing-resistant factor and does not permit the tenant to relax
+that. This is one of a small number of settings the tenant cannot configure
+downward, and it is stated plainly rather than buried, because a reviewer is
+entitled to know which controls are floors and which are defaults.
 
-The platform publishes the following recovery objectives for Enterprise tier customers:
+## Interaction with federated sign-in
 
-- Recovery Time Objective (RTO): 4 hours for a full regional loss, measured from the declaration of a regional event to the restoration of normal service in the unaffected region.
-- Recovery Point Objective (RPO): 15 minutes for bulk customer data; zero for critical metadata; zero for completed and acknowledged audit events.
-- Planned maintenance: scheduled maintenance windows are announced at least 14 days in advance and are limited to a maximum of two hours per quarter per tenant, exclusive of emergency maintenance.
+Where the tenant federates, the second factor is normally enforced at the
+customer's identity provider, and the service consumes the result. The service
+reads the authentication context class reference in a SAML assertion, or the
+corresponding claim in an OpenID Connect identity token, and applies tenant
+policy to what it finds. A tenant can require that the assertion demonstrate a
+phishing-resistant factor and reject sessions that do not.
 
-These objectives are commitments, not historical observations. In practice, the observed behavior during recent DR exercises has been within a fraction of these targets, but the objectives represent the bounds against which the platform is managed.
+Where the identity provider does not express the context, or where the tenant
+prefers belt and braces, the service can challenge for its own second factor on
+top of the federated sign-in. Doing both is a supported configuration, and some
+regulated tenants choose it.
 
-## DR exercise cadence
+## Step-up for sensitive operations
 
-DR exercises are conducted at least twice annually. Each exercise covers a defined scenario (for example, loss of one region for a simulated four-hour period) and validates the traffic-shift mechanism, the replication lag, and the operational runbooks. Exercise outcomes, including any discovered gaps and remediation actions, are documented and reviewed at the management review cycle.
+Certain operations require a fresh factor presentation regardless of how long
+the session has been open: creating or revoking an API credential, changing the
+federation configuration, changing delivery policy for a partner domain,
+changing key management settings, and exporting event records over a range
+longer than thirty days.
 
-At least one live-fire exercise per year involves shifting real traffic to a single region for a bounded window, to confirm that the platform's capacity planning and regional topology can in fact support full load from a single region. The results of the most recent live-fire exercise are available to Enterprise customers under non-disclosure through their Account Executive.
+Fresh means presented within the last five minutes of wall-clock time. An
+administrator signed in for six hours is challenged before creating a
+credential. The requirement applies to every role, including the highest, and
+cannot be configured away.
 
-## Backup policy
+## Enrolment and recovery
 
-Backups are a defense-in-depth layer below replication. Full backups of the primary customer-data stores are taken daily, with continuous point-in-time recovery available for a rolling 35-day window for relational data. Backup copies are stored in a separate AWS account from production, with distinct identity and access controls — to protect against the scenarios where replication is operating correctly but the data itself has been corrupted, deleted, or encrypted maliciously.
+A user enrols a factor on first sign-in, or when policy changes to require one.
+The service encourages enrolling two factors of different types, because the
+common failure is a single lost device rather than a compromise.
 
-Backup integrity is tested monthly by performing an actual restore from a randomly-selected backup into a pre-production environment and running an integrity check against the restored data. Backups that fail this test are investigated as a priority incident.
+Recovery is deliberately not self-service for administrative roles. A user who
+has lost every enrolled factor is recovered by a tenant administrator, and a
+tenant administrator who has lost every enrolled factor is recovered through
+the break-glass account or, failing that, through a verification procedure with
+the account team that involves a named contact and a callback to a number on
+record. Self-service recovery by email link is not offered, because it collapses
+the second factor into the first.
 
-Backups are retained for 90 days by default. Extended retention (up to seven years) is available on request for customers with specific regulatory obligations, subject to contractual amendment.
-
-## Customer-initiated deletion and the deletion-replication interaction
-
-When a customer initiates a deletion — either of specific data via the platform's APIs or of their entire tenant under contract termination — the deletion is propagated to both regions' replicas and recorded in the audit log. Cryptographic erasure of backups containing the deleted data occurs as those backups age out of the retention window; data is not recoverable from backups beyond the documented backup retention period regardless of the deletion request. Customers with extended retention should be aware that the extended retention window also applies to backups containing data that has subsequently been requested for deletion.
-
-## Incident communication
-
-In any regional event or security incident meeting the platform's published notification criteria, customers affected are communicated with through the channels configured on their tenant (email to designated contacts, platform status page, programmatic webhook if configured). The initial communication follows within 72 hours of confirmation of a qualifying event, with follow-up communications at documented milestones and a post-incident review delivered within 30 days.
-
-## Failover runbook summary
-
-The platform's failover runbook is the operational procedure executed when traffic must be shifted away from a region, whether due to a regional AWS event, a platform-level issue localized to one region, or a planned exercise. The runbook is reviewed quarterly and exercised at the documented cadence.
-
-The high-level sequence is: (1) an on-call engineer receives an alert or a declaration of a qualifying event and opens an incident channel following the documented severity criteria; (2) the incident commander verifies the current replication lag, the health of the unaffected region, and the capacity headroom in the unaffected region; (3) the traffic-shift decision is made by the incident commander, supported by a written assessment; (4) the DNS routing policy is updated to direct all customer traffic to the unaffected region, a change that propagates within the DNS TTL plus a small buffer (in practice, under two minutes); (5) once traffic has shifted, the team monitors the unaffected region for saturation, latency, or error-rate anomalies and takes any load-balancing or scaling actions required; (6) the status page is updated and, where warranted, direct customer notifications are dispatched.
-
-Recovery — the return of traffic to both regions once the affected region is healthy — follows a deliberate sequence rather than a sudden flip. Traffic is ramped back to the recovered region in stages (5%, 25%, 50%, 100%), with health checks at each stage and the ability to pause or roll back if any metric deviates from expectation.
-
-## Dependency mapping
-
-Business continuity depends on the continued operation of a small set of upstream dependencies. The dependency map is maintained by the platform operations team and reviewed at each management review.
-
-Tier-1 dependencies — those whose outage would prevent customer access to the platform for the duration of the upstream outage — comprise the AWS regional control planes for the services composing the data plane, the identity provider used for workforce SSO, the DNS service used for customer traffic routing, and the certificate authority underlying public TLS. Each tier-1 dependency has a documented alternate or compensating arrangement where commercially and technically feasible.
-
-Tier-2 dependencies — those whose outage would degrade but not prevent platform operation — comprise third-party observability and alerting systems, the ticketing system used by the operations function, and other supporting SaaS. Degradation scenarios are documented in the operational runbooks.
-
-Customer-facing dependencies — the platform's third-party integrations where the customer tenant configures an external system to receive data from the platform or provide data to the platform — are not part of the platform's continuity scope, but the platform provides durable retry and backoff for outbound calls to reduce the visibility of short customer-side outages.
-
-## Planned maintenance
-
-Scheduled maintenance windows are announced via the platform's status page and, where customer-facing impact is expected, via email to the designated tenant contacts. The announcement provides at least 14 days' notice, specifies the impacted services and the expected duration, and links to further detail.
-
-Most maintenance work is conducted without customer-visible impact, by using the active-active topology to drain traffic from the region being maintained while work proceeds. The published maintenance windows represent the bounds within which the maintenance may cause observable impact; in the typical case, no observable impact occurs.
-
-## Regulatory and contractual considerations
-
-Specific customer tenants are subject to regulatory or contractual requirements that exceed the platform's default continuity posture — for example, financial-services customers subject to DORA, or healthcare customers subject to HIPAA contingency-planning requirements. The platform's Enterprise tier accommodates contract-level commitments such as longer backup retention, additional region pairings for cross-region replication, and more frequent DR exercise participation.
-
-Customers whose regulatory obligations require participation in the DR exercise program, for example to satisfy an examiner's requirement that the customer has verified the continuity arrangements of a material third-party service provider, may coordinate with their Account Executive to be granted access to summarized results and, in some cases, live participation in a scheduled exercise.
+Every enrolment, every removal and every recovery is written to the tenant's
+event stream with the acting identity, the affected user and the time.
 """,
+    "scim_provisioning": """# SCIM 2.0 User and Group Provisioning
+
+## Scope of this document
+
+This document describes automated lifecycle management of tenant users and
+groups through a System for Cross-domain Identity Management endpoint, the
+alternative just-in-time path, and the reconciliation behaviour when the two
+sides disagree.
+
+## The endpoint
+
+Each tenant exposes a SCIM 2.0 endpoint at a per-tenant base path. The endpoint
+is authenticated with a bearer credential the administrator generates in the
+tenant administration plane. Credentials are shown once, are individually
+revocable, carry an optional expiry, and are scoped to provisioning operations
+only — a provisioning credential cannot read message content.
+
+The endpoint implements the standard resource types. For users: create, replace,
+patch, deactivate and reactivate. For groups: create, replace, patch and
+delete, with membership changes expressed as patch operations against the group
+resource. Filtering, pagination and the ServiceProviderConfig, ResourceTypes and
+Schemas discovery endpoints are implemented, which is what lets an identity
+provider configure itself against the tenant without hand-written mappings.
+
+## Attribute mapping
+
+The core user schema is supported, plus the enterprise user extension. The
+external identifier is the stable key; the user name carries the primary email
+address, which must be in a domain verified against the tenant. Given name,
+family name, display name, active status, title, department and manager are
+mapped. Unrecognised attributes are accepted and ignored rather than rejected,
+because an identity provider that sends a superset of what a target consumes is
+the normal case and failing the whole request over it produces support tickets
+rather than security.
+
+Group membership drives role assignment through the same mapping used by
+federated sign-in, so a tenant that uses both federation and provisioning
+maintains one mapping rather than two.
+
+## Deactivation semantics
+
+Deactivation is immediate and total. Setting a user inactive ends every live
+session for that user, revokes every issued token, and refuses new sessions
+until the user is reactivated. There is no grace period and no scheduled sweep
+in between.
+
+This is the single most important property of the provisioning path and the
+reason it is preferred over the just-in-time alternative. When a customer
+terminates an employee, the identity provider issues one patch and the user is
+out, in seconds, without anyone at the customer remembering that this service
+exists.
+
+Deactivation preserves the user record and everything attributed to it. Message
+history, event records and role assignments remain intact and attributable. A
+reactivated user resumes with the same identity rather than appearing as a new
+one, which is what keeps historical records coherent across an employee's
+leave, transfer or return.
+
+Hard deletion of a user resource is supported and is distinct from
+deactivation: it removes the identity, and it is refused where retention policy
+requires the record to persist, with a clear error rather than a silent
+partial effect.
+
+## Just-in-time provisioning
+
+Tenants that do not operate provisioning may instead enable just-in-time
+creation on first federated sign-in. The service creates the user from the
+asserted attributes, assigns roles from the group mapping, and establishes the
+session. On each later sign-in the attributes and roles are refreshed from the
+current assertion.
+
+The two paths are mutually exclusive per tenant. Just-in-time is simpler to
+turn on and materially weaker: a user removed at the identity provider is not
+deactivated here until they next attempt to sign in and fail, or until the
+lifecycle sweep runs. For a tenant handling regulated content that gap is
+usually unacceptable, which is why provisioning is the recommended path and
+just-in-time is documented as the fallback.
+
+## Reconciliation and conflicts
+
+Every operation is reconciled against current tenant membership. Conflicts
+return the standard SCIM error responses rather than a generic failure: a
+duplicate user name returns 409 with a uniqueness error, a malformed patch
+returns 400 with the invalidSyntax type, an unknown resource returns 404. The
+error body names the offending attribute, so an administrator reading their
+identity provider's failure log can act without opening a ticket.
+
+Conflicts are also written to the tenant's event stream, so a systematic
+mismatch between the identity provider's view and the tenant's — the usual
+symptom of a half-completed migration — is visible as a pattern rather than as
+scattered individual failures.
+
+## Rate limiting and bulk changes
+
+The endpoint is rate limited per tenant, with limits set well above the rate a
+normal identity provider generates and returning 429 with a Retry-After header
+when exceeded. Standards-conforming provisioning clients honour it.
+
+Bulk operations are supported for the initial load, where a tenant onboards
+several thousand users at once. A bulk request is processed as a unit with
+per-operation results, so a single bad record does not fail the load. Large
+initial loads are best coordinated with the account team, not because the
+service cannot absorb them, but because a load that half-succeeds against a
+misconfigured mapping is easier to prevent than to unpick.
+""",
+    "dr_bcp_rto_rpo": """# Disaster Recovery and Business Continuity — RTO and RPO
+
+## Scope of this document
+
+This document sets out the resilience posture of the cloud email encryption
+service: the topology, what is replicated and how, the published recovery
+objectives per component, the exercise programme, the backup regime, and the
+dependencies on which continuity rests.
+
+## Topology
+
+Each residency zone is served from two regions operating active-active. Both
+regions carry live traffic under normal conditions; neither is a cold standby
+that nobody has exercised. Traffic is steered by latency-based routing that can
+be collapsed onto a single region within about two minutes, which is the DNS
+time-to-live plus propagation.
+
+Within a region, every stateful component spans at least two availability
+zones, and stateless components scale independently across three. The loss of
+one availability zone is absorbed without a traffic shift and without a
+customer-visible event.
+
+Both regions in a zone are inside the residency boundary. A tenant pinned to
+the European Union zone fails over between two European Union regions; it does
+not fail over to another continent. This constrains the design and is
+deliberate: a continuity arrangement that violates the residency commitment is
+not a continuity arrangement a regulated customer can accept.
+
+## Replication
+
+Replication is chosen per data class.
+
+Tenant configuration, delivery policy, identity state and key references
+replicate synchronously between the two regions. A write is not acknowledged
+until it is durable in both. The cost is write latency; the benefit is that
+these classes have no data-loss window at all.
+
+Message bodies, attachments and metadata replicate asynchronously with a target
+lag under thirty seconds. Sudden loss of a region can therefore lose the most
+recent writes within that window.
+
+Event records are forwarded continuously to a durable store and are
+acknowledged to the tenant only once durable, so an event that has been
+acknowledged has not been lost.
+
+## Published recovery objectives
+
+| Component | Recovery time objective | Recovery point objective |
+| --- | --- | --- |
+| Encryption gateway and delivery path | 2 hours | 5 minutes |
+| Recipient portal | 4 hours | 15 minutes |
+| Tenant administration plane | 4 hours | 5 minutes |
+| Key management plane | 1 hour | 0 (synchronous) |
+| Event export | 4 hours | 0 for acknowledged records |
+
+These are commitments against which the service is managed, not observations.
+Measured behaviour in recent exercises has been well inside them; the numbers
+above are the bound, and the bound is what belongs in a contract.
+
+The service commitment for the Enterprise plan is 99.95% monthly uptime,
+measured as a rolling monthly average, excluding maintenance announced at least
+fourteen days in advance. Service credits for a missed month are set out in the
+service level agreement and are not described here.
+
+## Exercise programme
+
+Continuity arrangements are exercised at least twice a year. One exercise is a
+full regional evacuation: real production traffic for a residency zone is
+collapsed onto a single region for a bounded window, held there, and then
+ramped back in stages. This exercise is the one that matters, because it is the
+only one that proves a single region can actually carry the load — capacity
+planning on paper routinely says yes when the answer is no.
+
+The second exercise is scenario-based and rotates: loss of the key management
+plane, corruption of a replicated data set, loss of a critical supplier, and
+loss of the primary operational communication channel have all been exercised.
+Findings and remediation actions from every exercise are tracked to closure and
+reviewed at the quarterly management review.
+
+Enterprise customers may request a summary of the most recent exercise under
+non-disclosure, and a customer whose own regulator requires evidence of
+third-party continuity testing can arrange, through the account team, to
+observe a scheduled exercise.
+
+## Backups
+
+Backups sit below replication as a defence against a different failure: not
+losing the data, but corrupting or deleting it correctly-and-everywhere.
+Replication faithfully copies a destructive mistake to both regions; a backup
+does not.
+
+Full backups of every tenant data store are taken daily, with continuous
+point-in-time recovery over a rolling thirty-five-day window. Backup copies are
+written to an account separate from production, under distinct credentials that
+production workloads do not hold, with object lock preventing deletion inside
+the retention window even by an administrator of that account.
+
+Restore is tested monthly by restoring a randomly selected backup into an
+isolated environment and running an integrity check. A failed restore test is
+handled as a priority incident. Testing the restore rather than the backup is
+the point: a backup that has never been restored is a hypothesis.
+
+Extended retention beyond the default is available by contract for customers
+with statutory retention obligations.
+
+## Dependencies
+
+Continuity rests on a small number of upstream services, mapped and reviewed
+quarterly. Losing the infrastructure provider's regional control plane, the
+authoritative DNS service, the public certification authority, or the managed
+key service would each prevent normal operation for the duration of that
+outage; each has a documented compensating arrangement where one is technically
+and commercially available. Losing observability tooling, the ticketing system
+or the status page provider would degrade operations without preventing
+service.
+
+## Communication during an event
+
+During a declared event, the status page is updated first and continues to be
+updated at stated intervals even when there is nothing new to say, because
+silence is read as absence. Tenants with a configured webhook receive
+programmatic notification. Where the event meets the incident notification
+criteria, registered security contacts are notified directly within 72 hours of
+confirmation, and a written post-incident review follows within thirty days.
+""",
+    "ssdlc_secure_development": """# Secure Development Lifecycle — Design, Build and Release Controls
+
+## Scope of this document
+
+This document describes how security is built into the way software for the
+cloud email encryption service is designed, written, reviewed, built and
+released. It covers threat modelling, the controls that gate a change into the
+main branch, the build and release path, and how the team handles the
+inevitable case where something ships and turns out to be wrong.
+
+## Threat modelling
+
+Every service has a threat model, and the model is a living document rather
+than an artefact produced once for an assessor. A model is produced when a
+service is created and revisited whenever the trust boundary moves — a new
+external interface, a new data class handled, a new dependency inside the
+boundary, or a change to who can reach what.
+
+Modelling uses a structured decomposition: what the component holds, who talks
+to it, where the boundaries are, and what an attacker on each side of each
+boundary could attempt. Each identified threat gets a disposition: mitigated by
+a named control, accepted with a recorded rationale and owner, or transferred.
+Undispositioned threats block the design from proceeding, which is the only
+mechanism that reliably prevents a threat model from becoming decorative.
+
+Models are stored with the service they describe, in the same repository, so
+they are reviewed in the same change process as the code and go stale visibly
+rather than quietly.
+
+## What gates a change into the main branch
+
+A change cannot merge until five things hold.
+
+A peer code review is recorded from someone other than the author. Reviews are
+mandatory, and the branch protection enforces it rather than relying on the
+team's discipline. Changes touching cryptographic code, the policy engine, the
+key management plane or the tenant isolation boundary require a second reviewer
+drawn from a named group with the relevant depth.
+
+Static analysis passes with no new findings above the configured threshold.
+Existing findings are tracked with owners and dates rather than being
+suppressed silently; a suppression requires a comment naming the reason, and
+suppressions are reviewed in bulk quarterly.
+
+Dependency composition analysis passes. A new dependency with a known
+vulnerability above the threshold blocks the merge. An existing dependency that
+develops a known vulnerability raises a tracked item with a remediation target
+by severity, and blocks the next release if the target is missed.
+
+Secret scanning passes on the diff and on the full history of the branch. A
+detected credential fails the change and triggers revocation of the detected
+credential before anything else happens, on the assumption that a credential in
+a diff is already exposed.
+
+The test suite passes, including the tests that specifically exercise tenant
+isolation and delivery policy selection. Those tests are treated as security
+controls rather than as quality checks, and weakening one requires the same
+second review as changing cryptographic code.
+
+## Build and release
+
+Builds run in an isolated environment from a clean checkout, with no
+interactive access and no ambient credentials. Build inputs are pinned by
+digest rather than by tag, so a rebuilt artefact is the same artefact.
+
+Every deployable artefact is signed at build time, and the deployment path
+verifies the signature before an artefact may run. A software bill of materials
+is produced for every artefact and retained for the supported life of the
+release; the bill of materials policy document covers its contents and
+disclosure.
+
+Container images are scanned before promotion between environments. Images are
+rebuilt on a schedule regardless of whether the application code changed, so
+that base-layer fixes reach production without waiting for a feature.
+
+Infrastructure is defined as code and applied through the same review path as
+application changes. Manual change in production is prevented by policy rather
+than discouraged by convention, and detected drift raises an alert.
+
+## Environments and data
+
+Development and pre-production environments never contain production message
+content. Test data is synthetic and generated. This removes an entire class of
+exposure — the pre-production database restored from production and left
+reachable — rather than managing it.
+
+Pre-production is configured to match production in structure, so that a
+control that works in one works in the other, and so that the penetration test
+programme can run against pre-production with confidence that the result
+transfers.
+
+## Vulnerability handling and disclosure
+
+Findings arrive from static analysis, dependency analysis, image scanning, the
+annual independent test, the bug bounty programme and customers. All are
+triaged into one queue with a severity and an owner, because a finding's route
+of arrival says nothing about its importance.
+
+Remediation targets by severity are seven days for critical, thirty days for
+high, ninety days for medium, and best effort for low, measured from triage to
+verified fix. Targets that are going to be missed are escalated before they are
+missed, not after.
+
+A published disclosure policy invites external researchers to report findings,
+commits to acknowledging within two business days and to keeping the researcher
+informed, and undertakes not to pursue legal action against good-faith research
+conducted within the stated scope.
+
+## When something ships wrong
+
+The team runs blameless reviews after any change that causes a customer-visible
+failure or that introduces a security weakness later found by someone else. The
+output is a set of changes to the system or the process, each with an owner and
+a date, tracked in the same place as feature work. The review asks what about
+the environment made the mistake likely, not who made it. That framing is what
+keeps the reports honest, and an honest report is the only kind worth writing.
+""",
+    "sbom_policy": """# Software Bill of Materials — Generation and Disclosure Policy
+
+## Scope of this document
+
+This document sets out how a software bill of materials is produced for the
+cloud email encryption service, what it contains, how long it is kept, who can
+obtain it, and how it is used to answer a component-level vulnerability
+question quickly.
+
+## Format and generation
+
+A bill of materials is generated for every deployable artefact at build time in
+CycloneDX 1.5, in JSON encoding. CycloneDX is used rather than SPDX because its
+vulnerability and dependency-relationship extensions carry the information the
+support workflow actually needs; an SPDX 2.3 rendering can be produced on
+request for customers whose own tooling requires it.
+
+Generation happens inside the build, from the resolved dependency graph, not
+afterwards by scanning a finished image. Scanning a finished image finds what a
+scanner can recognise; building from the resolved graph records what was
+actually linked, including components a scanner would miss because they were
+vendored or statically linked.
+
+The document is generated for each artefact and for each container image, and
+the two are related in the same document set so that a question about "the
+gateway" can be answered without the asker needing to know how the gateway is
+packaged.
+
+## Contents
+
+Each entry carries the component name, version, package URL, supplier where
+known, declared licence, cryptographic hash of the retrieved artefact, and the
+dependency relationship — whether the component is a direct dependency of the
+application or is pulled in transitively, and by what.
+
+Transitive depth is recorded rather than flattened. When a report names a
+vulnerable component, the practical question is almost always whether the
+service reaches the vulnerable code path, and knowing that the component is
+four levels down behind a package that does not call the affected function is
+most of the answer.
+
+Build-time-only components are marked as such and separated from those present
+at runtime, because a vulnerability in a build tool and a vulnerability in a
+shipped library warrant different responses.
+
+## Signing and retention
+
+Each document is signed at generation with the same key used for artefact
+signing, so a document obtained from any route can be verified as the one this
+build produced. The document is stored alongside the artefact it describes and
+retained for the supported life of the release plus twelve months.
+
+Documents for every release still in support are retrievable at any time. This
+matters when a report lands about a component that was removed two releases
+ago: the question is whether any supported release still contains it, and that
+question is answered from the stored set rather than from memory.
+
+## Disclosure to customers
+
+A customer under a mutual non-disclosure agreement may obtain the bill of
+materials for any release it is running, on request through the account team,
+in CycloneDX 1.5 or SPDX 2.3.
+
+Disclosure requires the non-disclosure agreement. The complete component
+inventory of a security product is a useful document to an attacker choosing
+where to look, and the balance of interest favours giving it to customers who
+have a relationship rather than publishing it. Customers who need it for their
+own supply chain programme get it; the request is routine and is not treated as
+an exception.
+
+## Using it to answer a vulnerability question
+
+When a widely-reported vulnerability lands, the sequence is: query the stored
+documents across every supported release for the component and version range;
+determine for each match whether the affected code path is reachable in the
+service's configuration; assign severity and a remediation target from the
+standing schedule; and communicate to customers who have asked or, where the
+determination is that customers are affected, to all of them.
+
+The first step takes minutes because the documents are stored and queryable
+rather than being regenerated under pressure. The second step is the one that
+takes judgement, and having the first step already done is what leaves time for
+it.
+
+## Upstream expectations
+
+Suppliers of components used inside the trust boundary are expected to publish
+their own bill of materials, or to provide one on request. Where a supplier
+cannot, that is recorded as a supply chain risk against the component with an
+owner, and it weighs against the component in the review that happens whenever
+a replacement is considered.
+""",
+    "data_residency_matrix": """# Data Residency Matrix — Regions, Pinning and Cross-Border Transfer
+
+## Scope of this document
+
+This document states where tenant data is held, what "held" covers, how a
+tenant is pinned to a residency zone, the narrow circumstances in which data or
+access crosses a zone boundary, and the transfer safeguards that apply when it
+does.
+
+## Residency zones
+
+| Zone | Regions | Typical driver |
+| --- | --- | --- |
+| Canada | Two Canadian regions | Federal and provincial public sector, Canadian financial services |
+| United States | Two United States regions | United States regulated industries |
+| European Union | Two European Union regions | GDPR, sectoral supervision |
+| United Kingdom | Two United Kingdom regions | UK GDPR, Financial Conduct Authority expectations |
+| Australia | Two Australian regions | Australian government and financial services |
+
+A zone is served from two regions in an active-active configuration, and both
+sit inside the zone. Continuity within a zone therefore never requires leaving
+it. This is a constraint on the resilience design rather than a consequence of
+it.
+
+## What "pinned to a zone" covers
+
+A tenant elects a zone at provisioning. The election covers message bodies,
+attachments, message metadata, derived search indexes, key material including
+key-encryption keys and their versions, event records, and backup images of all
+of the above.
+
+It does not cover three things, and saying so plainly is more useful to a
+reviewer than a blanket claim that nothing ever leaves.
+
+Aggregate operational telemetry — request rates, error rates, latency
+distributions, capacity metrics — is collected centrally. It carries no message
+content, no message metadata, no personal data of senders or recipients, and no
+tenant-identifying content beyond an opaque tenant identifier.
+
+Support correspondence lives in the support platform, which is located in the
+European Union. A customer that raises a ticket and pastes content into it has
+placed that content there; the support workflow asks customers not to, and
+redacts what it detects, but the correspondence itself is not zone-pinned.
+
+Billing and contract records are held centrally and contain no message content.
+
+## Changing zones
+
+A tenant's zone can be changed after provisioning through a coordinated
+migration, not a configuration toggle. Migration copies data to the new zone,
+verifies it, re-wraps key material under the new zone's hierarchy, cuts traffic
+over, and then erases the source. The source erasure is verified and confirmed
+in writing, because a migration that leaves a readable copy behind has
+defeated its own purpose.
+
+Migration is scheduled with the account team. Duration depends on volume; a
+typical enterprise tenant completes inside a maintenance window.
+
+## Support access from outside the zone
+
+Engineering and support personnel are distributed. Where an issue requires a
+member of staff outside the tenant's zone to access tenant data, the access
+runs through a named-approval path: a request naming the tenant, the reason,
+the data needed and the time bound; approval by a person other than the
+requester; a session that expires automatically; and a record written to the
+tenant's own event stream, not only to an internal log.
+
+A tenant may require that its own administrator approve each such session
+before it can begin. Tenants in the Canadian and European Union zones commonly
+enable this, and public sector tenants generally require it. A tenant may also
+restrict support access to personnel located inside its zone, at the cost of a
+slower response outside that zone's business hours — the trade-off is real and
+is stated during onboarding rather than discovered later.
+
+## Transfer safeguards
+
+Where personal data does cross a zone boundary — support correspondence, an
+approved support session, or a cross-zone feature the tenant has explicitly
+enabled — the transfer relies on the 2021 Standard Contractual Clauses for
+transfers out of the European Economic Area, supplemented by a transfer impact
+assessment available on request, and on the International Data Transfer
+Addendum for transfers out of the United Kingdom. The GDPR position and the
+sub-processor register are set out in the Data Processing Agreement.
+
+The tenant's ability to hold its own root key material is relevant to a
+transfer assessment. Where the tenant holds the root key, content that crosses
+a boundary in sealed form remains unreadable without a call to the tenant's own
+key, and that call is recorded in the tenant's own key service.
+
+## Verifying the position
+
+A reviewer can verify the residency position rather than take it on trust. The
+tenant administration plane displays the elected zone and the regions serving
+it. The event stream records every support session against the tenant,
+including the location from which it was established. The sub-processor
+register names the processing location of each sub-processor. And the annual
+independent assessment covers the controls that enforce pinning, so the
+assertion is tested by someone other than the party making it.
+"""
 }
 
+# ---------------------------------------------------------------------------
+# prior-rfps/ — completed questionnaire extracts. Attribution lives in the
+# sidecar; the prose carries the answers.
+# ---------------------------------------------------------------------------
+
 PRIOR_RFP_BODIES: dict[str, str] = {
-    "acme_financial_soc2_answer": """# Prior RFP answer — Acme Financial: SOC 2 scope
+    "northwind_mutual_caiq_2026": """# Completed CAIQ v4.0.3 extract — Cryptography, Encryption and Key Management
 
-Approved for outbound use on 2025-07-01.
+Submitted 12 May 2026. Reviewed and approved for outbound use by the security
+assurance team.
 
-**Question:** Describe your SOC 2 Type II audit scope and the trust principles covered.
+## EKM-01 — Are encryption keys maintained by the cloud consumer or a trusted key management provider?
 
-**Approved answer:** Our SOC 2 Type II audit covers the Security, Availability, and Confidentiality trust principles. The most recent audit period ended June 2025. The report is available under NDA through your Account Executive.
+Both arrangements are offered. Under the default, tenant key-encryption keys
+are held by us in a managed key service. Enterprise tenants may instead supply
+a customer-managed key held in their own account, or hold root key material in
+a hardware security module they operate. Where the tenant holds the key, it can
+revoke our grant unilaterally, which renders sealed content unreadable
+immediately and reversibly, or schedule destruction, which is irreversible
+after the mandatory waiting period.
 
-**Note:** This answer was approved against the SOC 2 Type II report that was current at the time of approval. Confirm with the current compliance store before reusing verbatim.
+## EKM-02 — Do you have a capability to allow creation of unique encryption keys per tenant?
+
+Yes. Key-encryption keys are per tenant and, within a tenant, per data class —
+message bodies and attachments, message metadata, derived indexes, and event
+records each have their own. Data keys are per message.
+
+## EKM-03 — Do you encrypt tenant data at rest?
+
+Yes. Message bodies, attachments, metadata and derived indexes are sealed with
+AES-256-GCM under per-message data keys, which are wrapped by the tenant
+key-encryption key. Data keys exist in plaintext only in process memory for the
+duration of a single operation. The stored envelope carries the ciphertext, the
+nonce, the authentication tag and the wrapped data key.
+
+## EKM-04 — What is your key rotation policy?
+
+Key-encryption keys rotate on a 365-day cycle by default. Tenant administrators
+may rotate on demand at any time from the administration plane or the API, with
+effect within minutes. Rotation does not require rewriting existing envelopes,
+because each envelope names the key version that wrapped it; a background
+process migrates envelopes onto the current version over time.
+
+## EKM-08 — Do you have documented ownership for each stage of the key lifecycle?
+
+Yes. Generation, distribution, storage, use, rotation, archival and destruction
+each have a named owner and a documented procedure. The procedures are covered
+by the annual independent assessment and were tested without exception in the
+most recent report period.
+
+## Reviewer note
+
+These responses were approved against the encryption and key management
+documentation current at the date of submission. Confirm against the current
+product documentation before reuse; the key management posture is the area most
+likely to have gained options since.
 """,
-    "bluebird_encryption_answer": """# Prior RFP answer — Bluebird Insurance: encryption at rest
+    "cascadia_trust_caiq_2026": """# Completed CAIQ v4.0.3 extract — Identity and Access Management
 
-Approved for outbound use on 2025-08-15.
+Submitted 2 April 2026. Reviewed and approved for outbound use by the security
+assurance team.
 
-**Question:** How is customer data encrypted at rest? Specify algorithm, key length, and key management approach.
+## IAM-03 — Is a single sign-on solution supported for tenant users?
 
-**Approved answer:** Customer data at rest is encrypted with AES-256-GCM. Keys are managed in AWS KMS under the service organization's account by default. Enterprise customers may bring their own CMK, held in their own AWS account. Keys are rotated annually by default, with on-demand rotation available.
+Yes. Workforce sign-in federates over SAML 2.0 or OpenID Connect against the
+customer's identity provider. Signed assertions are mandatory and encrypted
+assertions are optional. Configuration is self-service, and supplying identity
+provider metadata by URL is recommended so that a signing certificate rollover
+propagates without manual intervention.
 
-**Note:** This answer was approved against the encryption architecture documentation current at the time of approval.
+## IAM-04 — Do you support multi-factor authentication for all tenant users?
+
+Yes. WebAuthn and FIDO2, time-based one-time passwords, push approval with
+number matching, and one-time codes by short message service are supported.
+Tenant policy determines who must present a second factor and which factors are
+acceptable. Roles that can read message content or change delivery policy
+require a phishing-resistant factor, and that requirement cannot be relaxed by
+tenant configuration.
+
+## IAM-09 — Is automated provisioning and deprovisioning supported?
+
+Yes, through a per-tenant SCIM 2.0 endpoint supporting create, update,
+deactivate and reactivate for users and create, update, delete and membership
+patch for groups. Deactivation is immediate: live sessions end, issued tokens
+are revoked, and new sessions are refused until reactivation. A just-in-time
+alternative exists for tenants that do not operate provisioning, and is
+documented as materially weaker for exactly this reason.
+
+## IAM-12 — How are privileged sessions controlled?
+
+Privileged operations require a factor presented within the last five minutes
+regardless of session age. This covers credential creation and revocation,
+federation configuration changes, delivery policy changes for a partner domain,
+key management settings, and event exports spanning more than thirty days. The
+requirement applies to every role including the highest.
+
+## IAM-14 — Are access rights reviewed periodically?
+
+Yes, quarterly for standing access to production, with the review recorded and
+the record retained. The review was tested without exception in the most recent
+independent assessment.
+
+## Reviewer note
+
+Approved against the identity documentation current at the date of submission.
 """,
-    "globex_fedramp_answer": """# Prior RFP answer — Globex: FedRAMP status
+    "meridian_health_caiq_2026": """# Completed CAIQ v4.0.3 extract — Data Security and Privacy Lifecycle
 
-Approved for outbound use on 2026-02-01.
+Submitted 18 February 2026. Reviewed and approved for outbound use by legal and
+the security assurance team.
 
-**Question:** What is your roadmap for FedRAMP Moderate authorization, and when will it be available?
+## DSP-01 — Do you provide a Data Processing Agreement?
 
-**Approved answer:** FedRAMP Moderate ATO assessment is in progress. A Third-Party Assessment Organization has been engaged and assessment work is underway. We do not publish a committed authorization date; timeline is set by the sponsoring agency's Authorizing Official. Please contact your Account Executive for the current status and any interim posture available to federal customers.
+Yes. The standard Data Processing Agreement is offered under Article 28 of the
+GDPR and its United Kingdom equivalent, executed as an annex to the master
+agreement. It incorporates the 2021 EU Standard Contractual Clauses in the
+controller-to-processor module and the UK International Data Transfer Addendum.
+It does not require negotiation for the great majority of customers.
 
-**Note:** FedRAMP status changes over time. Re-confirm against the compliance store before reusing.
+## DSP-04 — Do you publish a list of sub-processors?
+
+Yes. The register is published and versioned, and names each entity, the
+processing it performs and the country in which that processing occurs.
+Customers may subscribe to change notifications. A new sub-processor is
+announced at least thirty days before it begins processing, and a customer that
+objects on reasonable data protection grounds within the notice period may
+terminate the affected service without penalty if the objection cannot be
+resolved.
+
+## DSP-10 — How do you assist with data subject rights requests?
+
+Most requests are satisfied by the controller directly through the tenant
+administration plane, which supports search and export scoped to a data subject
+and supports deletion. Where a request cannot be satisfied that way, we assist
+within the timescales the Data Processing Agreement sets.
+
+## DSP-16 — Is customer data used for any secondary purpose?
+
+No. Message content and metadata are processed solely to deliver the contracted
+service on the customer's documented instruction. There is no use for
+marketing, for product analytics, or for training machine learning models. This
+is attested under ISO/IEC 27018:2019 as well as contracted.
+
+## DSP-19 — What happens to data at the end of the relationship?
+
+The customer may export through the documented path for thirty days after
+termination. After that, or immediately on written instruction, content is
+deleted and the deletion confirmed in writing. Content in backup images is
+rendered unrecoverable as those images age out of a retention window not
+exceeding thirty-five days, and the confirmation states this rather than
+implying instantaneous erasure everywhere.
+
+## Reviewer note
+
+Approved against the Data Processing Agreement version current at the date of
+submission. The sub-processor register changes; always cite the current
+version.
 """,
-    "northwind_sso_answer": """# Prior RFP answer — Northwind Capital: SSO protocols
+    "rideau_digital_caiq_2026": """# Completed CAIQ v4.0.3 extract — Datacentre Security and Data Location
 
-Approved for outbound use on 2026-01-15.
+Submitted 27 January 2026. Reviewed and approved for outbound use by the
+security assurance team. Prepared for a public sector procurement with a
+Canadian residency requirement.
 
-**Question:** Which SSO protocols do you support?
+## DCS-01 — In which countries is tenant data stored?
 
-**Approved answer:** We support SAML 2.0 and OpenID Connect as identity provider protocols for customer-initiated workforce SSO. OAuth 2.0 Authorization Code flow with PKCE is used for our native desktop and mobile integrations. SCIM 2.0 is supported for automated user provisioning and deprovisioning.
+The tenant is pinned to a residency zone elected at provisioning. For this
+engagement the zone is Canada, served from two Canadian regions in an
+active-active configuration. Both regions are inside the zone, so continuity
+within the zone never requires leaving Canada.
+
+## DCS-04 — What data classes are covered by the residency commitment?
+
+Message bodies, attachments, message metadata, derived search indexes, key
+material including key-encryption keys and their versions, event records, and
+backup images of all of the above. Not covered: aggregate operational telemetry
+carrying no content, metadata or personal data; support correspondence, which
+resides in a support platform in the European Union; and billing records. We
+state the exclusions explicitly rather than making a blanket claim.
+
+## DCS-06 — Can personnel outside the residency zone access tenant data?
+
+Only through a named-approval path. A request naming the tenant, the reason,
+the data required and a time bound is approved by a person other than the
+requester; the session expires automatically; and a record is written to the
+tenant's own event stream, not only to an internal log. This tenant has enabled
+the option requiring its own administrator to approve each session before it
+begins, and may additionally restrict support access to personnel located
+inside Canada.
+
+## DCS-09 — Is the residency control independently assessed?
+
+Yes. The controls that enforce zone pinning are within the scope of the ISO/IEC
+27001:2022 certified management system and are examined in the surveillance
+programme, so the assertion is tested by a party other than us.
+
+## Reviewer note
+
+Approved against the residency matrix current at the date of submission.
+""",
+    "anvil_capital_caiq_2025": """# Completed CAIQ v4.0.3 extract — Business Continuity and Security Incident Management
+
+Submitted 6 November 2025. Reviewed and approved for outbound use by the
+security assurance team.
+
+## BCR-01 — Do you have a business continuity plan, and is it exercised?
+
+Yes. Each residency zone runs active-active across two regions, both carrying
+live traffic. Continuity arrangements are exercised at least twice a year. One
+exercise is a full regional evacuation with real production traffic collapsed
+onto a single region for a bounded window; the other is scenario-based and
+rotates through loss of the key management plane, corruption of a replicated
+data set, loss of a critical supplier, and loss of the primary operational
+communication channel.
+
+## BCR-05 — What are your recovery objectives?
+
+The encryption gateway and delivery path carry a recovery time objective of 2
+hours and a recovery point objective of 5 minutes. The recipient portal carries
+4 hours and 15 minutes. The key management plane carries 1 hour and a zero
+recovery point objective, because its state replicates synchronously. These are
+commitments, not observations.
+
+## BCR-11 — How are backups protected and tested?
+
+Full backups daily with continuous point-in-time recovery over a rolling
+thirty-five day window. Copies are written to an account separate from
+production under credentials production workloads do not hold, with object lock
+preventing deletion inside the retention window. Restores are tested monthly
+into an isolated environment with an integrity check; a failed restore test is
+handled as a priority incident.
+
+## SEF-02 — Describe your security incident response process.
+
+Detection, triage, containment, eradication, recovery and review, with a named
+incident commander for any event above the lowest severity and a 24x7
+operations function performing triage. The procedure is exercised twice per
+report period, once as a tabletop and once as a live scenario.
+
+## SEF-05 — What are your customer notification timelines?
+
+Where an event has been confirmed to have affected the confidentiality,
+integrity or availability of a tenant's data, that tenant's registered security
+contacts are notified within 72 hours of confirmation. The initial notification
+states what is known, what is not yet known, the containment position and the
+point of contact. A written post-incident review follows within thirty days of
+closure. Events prevented by controls before impact, and events confined to
+internal systems without effect on tenant isolation, are recorded and reviewed
+internally but are not notifiable.
+
+## SEF-08 — Are incident response obligations covered contractually?
+
+Yes, the 72-hour notification commitment is in the master agreement and the
+Data Processing Agreement, and the control is within the scope of the SOC 2
+Type II report.
+
+## Reviewer note
+
+Approved against the continuity and incident documentation current at the date
+of submission. Recovery objectives have since been restated per component;
+confirm against the current documentation before reuse.
+""",
+    "helix_reinsurance_caiq_2025": """# Completed CAIQ v4.0.3 extract — Audit Assurance and Supply Chain
+
+Submitted 22 September 2025. Reviewed and approved for outbound use by the
+security assurance team.
+
+## A&A-01 — What independent assurance reports do you hold?
+
+A SOC 2 Type II report covering Security, Availability and Confidentiality, and
+ISO/IEC 27001:2022 certification with a Statement of Applicability available
+under non-disclosure. Conformance to ISO/IEC 27018:2019 for the processing of
+personally identifiable information in public cloud is attested alongside the
+ISO/IEC 27001 surveillance activity.
+
+## A&A-02 — How often are these renewed?
+
+The SOC 2 Type II report is produced annually against a twelve-month period.
+ISO/IEC 27001 follows the standard three-year cycle with annual surveillance.
+Internal audit covers the whole management system annually, independently of
+the external cycle.
+
+## A&A-05 — Do you commission independent penetration testing?
+
+Yes, annually, by an independent testing firm, covering the internet-facing
+gateway and its SMTP listeners, the recipient portal, the administration plane
+and API, and the externally reachable interfaces of the key management plane.
+An executive summary is available on request; the full technical report is
+released under a mutual non-disclosure agreement.
+
+## STA-05 — Do you produce a software bill of materials?
+
+Yes. A signed CycloneDX 1.5 bill of materials is generated at build time for
+every deployable artefact from the resolved dependency graph, and retained for
+the supported life of the release plus twelve months. Customers under a mutual
+non-disclosure agreement may obtain the bill of materials for any release they
+are running, in CycloneDX or SPDX.
+
+## STA-09 — How are sub-processors and suppliers assessed?
+
+Before onboarding, against the criteria in the supplier management procedure,
+and annually thereafter. Contractual security terms are no less protective than
+those we owe our own customers. Sub-processors are disclosed in the published
+register with thirty days' notice before any change takes effect.
+
+## STA-14 — What are your vulnerability remediation targets?
+
+Seven days for critical, thirty days for high, ninety days for medium, best
+effort for low, measured from triage to verified fix. Targets expected to be
+missed are escalated before the deadline rather than after.
+
+## Reviewer note
+
+Approved against the assurance evidence current at the date of submission. The
+SOC 2 report period cited here has since been superseded — always cite the
+current report.
 """,
 }
 
@@ -465,11 +1641,14 @@ Approved for outbound use on 2026-01-15.
 # Rendering
 # ---------------------------------------------------------------------------
 
+
 def _render_pdf(dest: Path, title: str, blocks: list[dict[str, Any]]) -> None:
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Heading1"], spaceBefore=18, spaceAfter=10)
     h2 = ParagraphStyle("h2", parent=styles["Heading2"], spaceBefore=12, spaceAfter=8)
-    body = ParagraphStyle("body", parent=styles["BodyText"], fontSize=10.5, leading=15, spaceAfter=8)
+    body = ParagraphStyle(
+        "body", parent=styles["BodyText"], fontSize=10.5, leading=15, spaceAfter=8
+    )
 
     doc = SimpleDocTemplate(
         str(dest),
@@ -485,7 +1664,10 @@ def _render_pdf(dest: Path, title: str, blocks: list[dict[str, Any]]) -> None:
         elif "p" in block:
             flow.append(Paragraph(block["p"], body))
         elif "table" in block:
-            t = Table(block["table"], repeatRows=1, colWidths=[1.1 * inch, 3.9 * inch, 1.4 * inch])
+            rows = block["table"]
+            ncols = len(rows[0])
+            widths = {2: [2.2, 4.2], 3: [1.1, 3.9, 1.4], 4: [1.1, 2.6, 1.6, 1.4]}[ncols]
+            t = Table(rows, repeatRows=1, colWidths=[w * inch for w in widths])
             t.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#d9d9d9")),
                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
@@ -509,22 +1691,63 @@ def _write_metadata_sidecar(doc_path: Path, attrs: dict[str, Any]) -> None:
     sidecar.write_text(json.dumps({"metadataAttributes": attrs}, indent=2))
 
 
-def _build_attrs(source_type: str, src_json: dict[str, Any]) -> dict[str, Any]:
+# Sidecar keys carried through from the compact source JSON. `document_id`,
+# `source_type` and `source_id` are set explicitly; the rest are copied when
+# present. Everything here is flat and scalar (or a list of strings) because
+# that is all Bedrock KB filterable metadata accepts, and because
+# retriever._sidecar_metadata() drops anything else.
+_PASSTHROUGH_KEYS = (
+    "updated_at",
+    "approved_at",
+    "approved_by",
+    "answered_at",
+    "expires_on",
+    "question_text",
+    "audience",
+    "customer_name",
+    "customer_id",
+    "questionnaire_id",
+    "questionnaire_name",
+)
+
+
+# Sidecar keys that shared.provenance.Provenance parses into `datetime`. They
+# are written as timezone-aware ISO-8601, not as bare dates.
+#
+# A bare "2025-06-30" parses into a NAIVE datetime, and Provenance.is_expired
+# then compares it against datetime.now(UTC) — an aware value — which raises
+# TypeError rather than returning a boolean. The same applies to
+# Provenance.age_days and to the divergence detector's sort, which uses an
+# aware epoch as its floor. Appending the offset here keeps every consumer
+# working. Lexicographic ordering is preserved, so the string comparisons that
+# Bedrock KB metadata filters and retriever._kb_prior_matches rely on still
+# behave: "2027-07-14T00:00:00+00:00" > "2026-08-27" exactly as the bare dates
+# would compare.
+_DATETIME_KEYS = ("answered_at", "approved_at", "expires_on")
+
+
+def _as_utc_iso(value: str) -> str:
+    """Widen a YYYY-MM-DD sidecar date to a timezone-aware ISO-8601 timestamp."""
+    text = str(value)
+    if len(text) == 10 and text.count("-") == 2:
+        return f"{text}T00:00:00+00:00"
+    return text
+
+
+def _build_attrs(prefix: str, src_json: dict[str, Any]) -> dict[str, Any]:
     attrs: dict[str, Any] = {
         "document_id": src_json["document_id"],
-        "source_type": source_type,
-        "topic_ids":   list(src_json.get("topic_ids", [])),
+        "source_type": SOURCE_TYPE_BY_PREFIX[prefix],
+        "source_id": SOURCE_ID_BY_PREFIX[prefix],
+        "topic_ids": list(src_json.get("topic_ids", [])),
     }
-    if "updated_at" in src_json:
-        attrs["updated_at"] = src_json["updated_at"]
-    if "approved_at" in src_json:
-        attrs["approved_at"] = src_json["approved_at"]
-    # sme-approved entries carry approver + expiry + original question text so
-    # the retriever can populate PriorAnswerMatch fields from sidecar metadata
-    # without parsing the markdown body.
-    for extra_key in ("approved_by", "expires_on", "question_text"):
-        if src_json.get(extra_key):
-            attrs[extra_key] = src_json[extra_key]
+    for key in _PASSTHROUGH_KEYS:
+        if src_json.get(key):
+            attrs[key] = (
+                _as_utc_iso(src_json[key]) if key in _DATETIME_KEYS else src_json[key]
+            )
+    if src_json.get("corroborated_by"):
+        attrs["evidence_refs"] = list(src_json["corroborated_by"])
     return attrs
 
 
@@ -543,7 +1766,9 @@ def _generate_compliance(src_path: Path) -> tuple[Path, dict[str, Any]]:
 def _generate_product_doc(src_path: Path) -> tuple[Path, dict[str, Any]]:
     data = json.loads(src_path.read_text())
     doc_id = data["document_id"]
-    body = PRODUCT_DOCS_BODIES.get(doc_id) or f"# {data.get('title', doc_id)}\n\n{data.get('excerpt', '')}\n"
+    body = PRODUCT_DOCS_BODIES.get(doc_id) or (
+        f"# {data.get('title', doc_id)}\n\n{data.get('excerpt', '')}\n"
+    )
     dest = DST / "product-docs" / f"{doc_id}.md"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(body)
@@ -553,7 +1778,9 @@ def _generate_product_doc(src_path: Path) -> tuple[Path, dict[str, Any]]:
 def _generate_prior_rfp(src_path: Path) -> tuple[Path, dict[str, Any]]:
     data = json.loads(src_path.read_text())
     doc_id = data["document_id"]
-    body = PRIOR_RFP_BODIES.get(doc_id) or f"# {data.get('title', doc_id)}\n\n{data.get('excerpt', '')}\n"
+    body = PRIOR_RFP_BODIES.get(doc_id) or (
+        f"# {data.get('title', doc_id)}\n\n{data.get('excerpt', '')}\n"
+    )
     dest = DST / "prior-rfps" / f"{doc_id}.md"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(body)
@@ -562,15 +1789,19 @@ def _generate_prior_rfp(src_path: Path) -> tuple[Path, dict[str, Any]]:
 
 def _generate_sme_approved(src_path: Path) -> tuple[Path, dict[str, Any]]:
     """Format SME-approved Q&A as markdown. The embedding model sees the full
-    Q + A text, so semantic similarity against an inbound RFP question is
+    Q + A text, so semantic similarity against an inbound question is
     high-quality — this is what powers the real cosine-based H signal.
+
+    Shape must stay in step with lambdas/review_api/handler.py:_sme_markdown(),
+    which writes the same layout when an SME's edit is promoted back into the
+    knowledge base. The second-run flywheel depends on the two matching.
     """
     data = json.loads(src_path.read_text())
     doc_id = data["document_id"]
     body = (
         f"# SME-Approved Q&A — {doc_id}\n\n"
         f"**Approved:** {data.get('approved_by', 'unknown')} on {data.get('approved_at', '?')}  \n"
-        f"**Topics:** {', '.join(data.get('topic_ids', []))}  \n"
+        f"**Topics:** {', '.join(data.get('topic_ids', [])) or '—'}  \n"
         f"**Corroborated by:** {', '.join(data.get('corroborated_by', [])) or '—'}\n\n"
         f"## Question\n\n{data.get('question_text', '').strip()}\n\n"
         f"## Answer\n\n{data.get('answer_text', '').strip()}\n"
@@ -596,20 +1827,31 @@ def main() -> None:
         )
 
     emitted = 0
+    per_prefix: dict[str, int] = {}
     for prefix, gen in GENERATORS.items():
         src_dir = SRC / prefix
         if not src_dir.exists():
             print(f"  SKIP {prefix}/ — no source sidecars")
             continue
+        dst_dir = DST / prefix
+        # The corpus is a fixed set. Clear the target so a document dropped
+        # from the source tree does not linger and get uploaded to S3.
+        if dst_dir.exists():
+            for stale in dst_dir.iterdir():
+                if stale.is_file():
+                    stale.unlink()
         for src in sorted(src_dir.glob("*.json")):
             dest, data = gen(src)
-            attrs = _build_attrs(SOURCE_TYPE_BY_PREFIX[prefix], data)
+            attrs = _build_attrs(prefix, data)
             _write_metadata_sidecar(dest, attrs)
             rel = dest.relative_to(ROOT)
             print(f"  wrote {rel}  ({len(attrs['topic_ids'])} topic_ids)")
             emitted += 1
+            per_prefix[prefix] = per_prefix.get(prefix, 0) + 1
 
     print(f"\nDone. {emitted} documents + sidecars under {DST.relative_to(ROOT)}/")
+    for prefix in GENERATORS:
+        print(f"  {prefix + '/':<16} {per_prefix.get(prefix, 0)}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,19 @@
+{
+  "metadataAttributes": {
+    "document_id": "rideau_digital_caiq_2026",
+    "source_type": "prior_rfp",
+    "source_id": "prior_rfps",
+    "topic_ids": [
+      "data_residency",
+      "iso27001"
+    ],
+    "approved_at": "2026-01-27T00:00:00+00:00",
+    "approved_by": "s.okonkwo@echoworx.example",
+    "answered_at": "2026-01-27T00:00:00+00:00",
+    "audience": "customer",
+    "customer_name": "Province of Rideau - Digital Services",
+    "customer_id": "cust-prd-004",
+    "questionnaire_id": "caiq-v4-prd-2026",
+    "questionnaire_name": "CAIQ v4.0.3"
+  }
+}

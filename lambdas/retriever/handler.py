@@ -27,12 +27,8 @@ from this envelope. Force-tier (pricing) is forwarded via corroboration_metadata
 from __future__ import annotations
 
 import functools
-import json
 import os
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import date, datetime
 from typing import Any
 
@@ -80,12 +76,7 @@ _SOURCE_TO_SYSTEM: dict[str, str] = {
     "sme_approved_answers": "sme_approved",
 }
 
-_DEFERRED_SOURCES = {"deal_desk"}  # seismic + gong are wired via MOCK_SOURCES_API_URL
-
-_MOCK_SOURCE_PATHS = {
-    "seismic": "/seismic/content",
-    "gong": "/gong/calls",
-}
+_DEFERRED_SOURCES = {"deal_desk"}
 
 # ---------------------------------------------------------------------------
 # Topic keyword map — kept in sync with question_classifier/_TOPIC_PATTERNS.
@@ -244,61 +235,6 @@ def _hydrate_provenance(md: dict[str, Any], *, document_id: str, source: str) ->
         return None
 
 
-def _mock_api_passages(source: str, text: str, top_k: int = 5) -> list[RetrievedPassage]:
-    """Call the mock sources API for seismic or gong content.
-
-    Circuit-breaker behaviour: on any non-200 response or timeout, returns []
-    and logs source_degraded. The corroboration_metadata field in the Retrieval
-    envelope carries `source_degraded` into the Step Functions audit trail.
-    """
-    base_url = os.environ.get("MOCK_SOURCES_API_URL", "")
-    if not base_url:
-        logger.info("retriever.mock_api_not_configured", source=source)
-        return []
-
-    path = _MOCK_SOURCE_PATHS.get(source, "")
-    if not path:
-        return []
-
-    # S310 below: the scheme comes from MOCK_SOURCES_API_URL, a service-owned
-    # environment variable set by the CDK stack, not from anything a caller or
-    # a questionnaire can influence. Only the query string is caller-derived,
-    # and it is percent-encoded.
-    url = f"{base_url}{path}?query={urllib.parse.quote(text)}&limit={top_k}"
-    req = urllib.request.Request(  # noqa: S310
-        url,
-        headers={"Authorization": "Bearer demo-key"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=3) as resp:  # noqa: S310
-            if resp.status != 200:
-                logger.warning("retriever.source_degraded", source=source, status=resp.status)
-                return []
-            data = json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError) as exc:
-        logger.warning("retriever.source_degraded", source=source, error=str(exc))
-        return []
-
-    system_map = {"seismic": "seismic", "gong": "gong"}
-    source_system = system_map.get(source, "other")
-    passages = []
-    for item in data.get("results", []):
-        meta: dict[str, Any] = {}
-        if item.get("updated_at"):
-            meta["updated_at"] = item["updated_at"]
-        passages.append(
-            RetrievedPassage(
-                source_system=source_system,  # type: ignore[arg-type]
-                document_id=item.get("card_id") or item.get("call_id", "unknown"),
-                excerpt=item.get("excerpt", "")[:2000],
-                score=float(item.get("score", 0.5)),
-                uri=url,
-                metadata=meta,
-            )
-        )
-    return passages
-
-
 def _retrieve_for_sources(
     sources: list[str], text: str, top_k: int = 5
 ) -> tuple[list[RetrievedPassage], list[str]]:
@@ -311,15 +247,6 @@ def _retrieve_for_sources(
             continue
         if source == "customer_refs_db":
             continue  # handled via _dynamo_reference_customers
-        if source in _MOCK_SOURCE_PATHS:
-            results = _mock_api_passages(source, text, top_k)
-            passages.extend(results)
-            # Degraded = attempted the call but API returned no results due to error.
-            # _mock_api_passages returns [] on any non-200 or timeout and already logged.
-            # We detect degradation by checking if MOCK_SOURCES_API_URL is set but we got nothing.
-            if not results and os.environ.get("MOCK_SOURCES_API_URL"):
-                degraded.append(source)
-            continue
         if source not in _SOURCE_TYPE_FILTER:
             logger.warning("retriever.unknown_source", source=source)
             continue

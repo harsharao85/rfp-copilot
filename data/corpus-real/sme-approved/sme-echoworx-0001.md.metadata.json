@@ -1,0 +1,15 @@
+{
+  "metadataAttributes": {
+    "document_id": "sme-echoworx-0001",
+    "source_type": "sme_approved_answer",
+    "source_id": "sme_approved_answers",
+    "topic_ids": [],
+    "approved_at": "2026-07-14T00:00:00+00:00",
+    "approved_by": "r.calloway@echoworx.example",
+    "expires_on": "2027-07-14T00:00:00+00:00",
+    "question_text": "Can recipients open encrypted messages using a third-party secure email gateway from another vendor, without enrolling in our recipient portal?",
+    "evidence_refs": [
+      "encryption_in_transit_tls"
+    ]
+  }
+}

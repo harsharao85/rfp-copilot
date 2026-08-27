@@ -1,0 +1,10 @@
+{
+  "document_id": "mfa_factors_policy",
+  "title": "Multi-Factor Authentication \u2014 Supported Factors and Policy",
+  "excerpt": "Supported second factors are WebAuthn/FIDO2 roaming and platform authenticators, TOTP per RFC 6238, and push approval. Tenant policy can require a second factor for every sign-in, for administrative roles only, or for step-up on sensitive operations.",
+  "updated_at": "2026-04-14",
+  "audience": "internal",
+  "topic_ids": [
+    "mfa"
+  ]
+}

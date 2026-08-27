@@ -624,47 +624,26 @@ def _contains_float(obj: Any) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 6. Coverage gap: the mock-sources URL builder had no test
+# 6. The mock-sources URL builder used to be tested here.
 #
-# mypy flagged `urllib.request.quote` as a missing attribute, which looked at
-# first like a live AttributeError. It is not — urllib.request re-exports
-# quote from urllib.parse, so it worked; typeshed just does not mark it as a
-# re-export. The call now says urllib.parse.quote because that is where the
-# function actually lives, and this test exists because chasing that turned up
-# a genuinely untested path: nothing anywhere asserted what URL the Seismic
-# and Gong lookups build, or that the query string is encoded at all.
+# _mock_api_passages() and the MockSourcesApi that served it were removed when
+# the stack was de-personalised: the retriever no longer calls any HTTP source,
+# so there is no URL left to build or encode. The test went with the code it
+# covered rather than being weakened to keep it green. The retriever's
+# remaining source fan-out is covered by tests/test_retriever_kb_adapter.py.
 # ---------------------------------------------------------------------------
 
 
-def test_mock_source_url_is_built_and_query_is_encoded(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from retriever.handler import _mock_api_passages
+def test_retriever_has_no_http_source_fan_out() -> None:
+    """Guard against the mock HTTP source being reintroduced by accident.
 
-    monkeypatch.setenv("MOCK_SOURCES_API_URL", "https://mock.example.test")
-    captured: dict[str, Any] = {}
+    Every source the retriever knows must resolve through the Knowledge Base,
+    the DynamoDB customer-refs gate, or the deferred list — never an outbound
+    HTTP call from inside the retrieval path.
+    """
+    assert not hasattr(handler, "_mock_api_passages")
+    assert not hasattr(handler, "_MOCK_SOURCE_PATHS")
 
-    class _Resp:
-        status = 200
-
-        def read(self) -> bytes:
-            return b'{"results": []}'
-
-        def __enter__(self) -> _Resp:
-            return self
-
-        def __exit__(self, *_: Any) -> None:
-            return None
-
-    def fake_urlopen(req: Any, timeout: int = 3) -> _Resp:
-        captured["url"] = req.full_url
-        return _Resp()
-
-    import urllib.request
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-
-    assert _mock_api_passages("seismic", "key rotation & storage") == []
-    assert captured["url"].startswith("https://mock.example.test/seismic/content?")
-    # Encoded, not raw — a bare & would truncate the query server-side.
-    assert "key%20rotation%20%26%20storage" in captured["url"]
+    passages, degraded = handler._retrieve_for_sources(["seismic", "gong"], "any question")
+    assert passages == []
+    assert degraded == []

@@ -1,0 +1,12 @@
+{
+  "metadataAttributes": {
+    "document_id": "encryption_at_rest_aes256gcm",
+    "source_type": "product_doc",
+    "source_id": "product_docs",
+    "topic_ids": [
+      "encryption_at_rest"
+    ],
+    "updated_at": "2026-05-04",
+    "audience": "internal"
+  }
+}

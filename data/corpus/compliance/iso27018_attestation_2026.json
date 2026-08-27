@@ -1,0 +1,13 @@
+{
+  "document_id": "iso27018_attestation_2026",
+  "title": "ISO/IEC 27018:2019 Attestation \u2014 Public Cloud PII Processing",
+  "excerpt": "Attestation of conformance to ISO/IEC 27018:2019 for the protection of personally identifiable information processed in public cloud. Assessed alongside the ISO/IEC 27001 surveillance audit, February 2026.",
+  "updated_at": "2026-02-10",
+  "expires_on": "2029-02-09",
+  "audience": "certification",
+  "topic_ids": [
+    "iso27001",
+    "gdpr",
+    "data_residency"
+  ]
+}

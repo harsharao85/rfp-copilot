@@ -1,0 +1,10 @@
+{
+  "document_id": "dr_bcp_rto_rpo",
+  "title": "Disaster Recovery and Business Continuity \u2014 RTO and RPO",
+  "excerpt": "Active-active across two regions per residency zone. Published objectives: RTO 2 hours and RPO 5 minutes for the gateway, RTO 4 hours and RPO 15 minutes for the recipient portal. Service commitment is 99.95% monthly uptime on the Enterprise plan.",
+  "updated_at": "2026-03-19",
+  "audience": "internal",
+  "topic_ids": [
+    "dr_bcp"
+  ]
+}

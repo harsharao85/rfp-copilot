@@ -1,0 +1,12 @@
+{
+  "document_id": "soc2_type2_2026",
+  "title": "SOC 2 Type II Report Summary \u2014 FY2026",
+  "excerpt": "SOC 2 Type II report covering Security, Availability and Confidentiality. Report period 2025-04-01 to 2026-03-31, issued 2026-06-15 by an independent CPA firm. No exceptions noted. Covers the email encryption gateway, the recipient portal and the tenant administration plane.",
+  "updated_at": "2026-06-15",
+  "expires_on": "2027-06-15",
+  "audience": "certification",
+  "topic_ids": [
+    "soc2",
+    "incident_response"
+  ]
+}

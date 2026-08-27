@@ -1,0 +1,14 @@
+{
+  "metadataAttributes": {
+    "document_id": "soc2_type2_2026",
+    "source_type": "compliance_cert",
+    "source_id": "compliance_store",
+    "topic_ids": [
+      "soc2",
+      "incident_response"
+    ],
+    "updated_at": "2026-06-15",
+    "expires_on": "2027-06-15T00:00:00+00:00",
+    "audience": "certification"
+  }
+}

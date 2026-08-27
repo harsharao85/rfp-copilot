@@ -26,8 +26,12 @@ ddb = boto3.resource("dynamodb")
 sfn = boto3.client("stepfunctions")
 s3 = boto3.client("s3")
 
+# Set by the CDK stack from the `corsOrigins` context value. API Gateway's own
+# CORS configuration enforces the full origin list; this header covers the
+# non-preflight response. Falls back to "*" only when the stack has not set it
+# — never to a particular site.
 CORS = {
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": os.environ.get("CORS_ALLOW_ORIGIN", "*"),
     "Access-Control-Allow-Headers": "Content-Type",
 }
 

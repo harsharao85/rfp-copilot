@@ -1,0 +1,10 @@
+{
+  "document_id": "sbom_policy",
+  "title": "Software Bill of Materials \u2014 Generation and Disclosure Policy",
+  "excerpt": "A CycloneDX 1.5 SBOM is generated for every deployable artifact at build time, signed, and retained for the supported life of the release. Customer-facing SBOMs are available on request under the mutual non-disclosure agreement.",
+  "updated_at": "2026-06-22",
+  "audience": "internal",
+  "topic_ids": [
+    "sbom"
+  ]
+}

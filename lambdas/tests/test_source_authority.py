@@ -73,6 +73,14 @@ def test_empty_topics_returns_default() -> None:
     assert plan == DEFAULT_DISPATCH_PLAN
 
 
+def test_unclassified_has_no_tertiary_sources() -> None:
+    """The unclassified class carried `seismic` as its tertiary, served by the
+    mock sources API. That API is gone, so the source goes too — an always-empty
+    tertiary would quietly lower every unclassified question's C signal."""
+    assert DEFAULT_DISPATCH_PLAN.tertiary == []
+    assert get_dispatch_plan(["totally_unknown_topic"]).tertiary == []
+
+
 # ---------------------------------------------------------------------------
 # Dispatch: class merge priority
 # ---------------------------------------------------------------------------
@@ -99,9 +107,18 @@ def test_dr_bcp_pulls_compliance_as_additional_primary() -> None:
     assert "compliance_store" in plan.primary
 
 
-def test_sso_adds_seismic_tertiary() -> None:
-    plan = get_dispatch_plan(["sso"])
-    assert "seismic" in plan.tertiary
+@pytest.mark.parametrize("topic", ["sso", "mfa"])
+def test_auth_product_topics_carry_no_extra_tertiary(topic: str) -> None:
+    """sso and mfa used to pull a `seismic` tertiary from the mock sources API.
+
+    That API is gone. A tertiary that can never return a passage is not
+    harmless: it depresses the C (source-coverage) signal, which lowers the
+    composite, which pushes questions to amber the scorer was not calibrated
+    to send there. The source is removed rather than merely unconfigured.
+    """
+    plan = get_dispatch_plan([topic])
+    assert plan.topic_class == "auth_product"
+    assert plan.tertiary == []
 
 
 def test_all_dispatch_table_topics_are_valid_plans() -> None:

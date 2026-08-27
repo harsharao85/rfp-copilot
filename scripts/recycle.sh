@@ -22,8 +22,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INFRA="$ROOT/infra"
-PREFIX="rfp-copilot-dev"
-REGION="${AWS_REGION:-us-east-1}"
+# Stage and region follow the operator's environment, not this file. STAGE must
+# match the `stage` CDK context the stacks were deployed with (default: poc).
+STAGE="${STAGE:-poc}"
+PREFIX="rfp-copilot-$STAGE"
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || echo us-east-1)}}"
 
 # Pick the newest available Python (scripts use type hints that need 3.10+).
 PY="$(command -v python3.13 || command -v python3.12 || command -v python3)"
@@ -83,7 +86,9 @@ cmd_up() {
   cd "$INFRA"
   [ -d node_modules ] || npm ci --silent
   npx cdk bootstrap "aws://$account/$REGION" 2>/dev/null || true
-  npx cdk deploy --all --require-approval never --outputs-file "$INFRA/outputs.json"
+  npx cdk deploy --all --require-approval never \
+    -c "stage=$STAGE" -c "region=$REGION" \
+    --outputs-file "$INFRA/outputs.json"
 
   log "Seeding CustomerRefs + KB corpus…"
   cd "$ROOT"
@@ -140,7 +145,7 @@ cmd_down() {
 
   log "Running cdk destroy --all --force…"
   cd "$INFRA"
-  npx cdk destroy --all --force || log "  (cdk destroy returned non-zero — continuing cleanup)"
+  npx cdk destroy --all --force -c "stage=$STAGE" -c "region=$REGION" || log "  (cdk destroy returned non-zero — continuing cleanup)"
 
   log "Cleaning up retained resources (DDB tables default to RETAIN)…"
   for table in $(aws dynamodb list-tables --region "$REGION" \

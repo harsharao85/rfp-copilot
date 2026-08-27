@@ -42,7 +42,7 @@ class _ClassConfig:
     # Topics that carry extra primaries (e.g. dr_bcp pulls compliance too).
     # Maps topic_id → additional primary sources.
     extra_primary_by_topic: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    # Topics that carry extra tertiaries (e.g. sso/mfa pull seismic).
+    # Topics that carry extra tertiaries beyond the class default.
     extra_tertiary_by_topic: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
@@ -58,19 +58,19 @@ CLASS_CONFIGS: dict[str, _ClassConfig] = {
             "dr_bcp": ("compliance_store",),
             "data_residency": ("compliance_store",),
         },
-        extra_tertiary_by_topic={
-            "sso": ("seismic",),
-            "mfa": ("seismic",),
-        },
     ),
     "gated": _ClassConfig(
         primary=(),  # set per topic below
         force_tier=None,
     ),
+    # No tertiary. The seismic source was removed with the mock sources API;
+    # leaving it listed would keep asking for a source that can never answer,
+    # and a tertiary that always returns zero passages depresses the C
+    # (source-coverage) signal, the composite score, and therefore the
+    # green/amber split the scorer was calibrated against.
     "unclassified": _ClassConfig(
         primary=("product_docs",),
         secondary=("prior_rfps",),
-        tertiary=("seismic",),
     ),
 }
 

@@ -1,0 +1,17 @@
+{
+  "document_id": "anvil_capital_caiq_2025",
+  "title": "Completed CAIQ extract \u2014 Anvil Capital Partners (resilience and response)",
+  "excerpt": "CAIQ v4.0.3 responses covering BCR-01 through BCR-11 and SEF-01 through SEF-08. Active-active regional topology, twice-yearly recovery exercises, and confirmed-incident notification to affected tenants within 72 hours.",
+  "customer_name": "Anvil Capital Partners",
+  "customer_id": "cust-acp-005",
+  "questionnaire_id": "caiq-v4-acp-2025",
+  "questionnaire_name": "CAIQ v4.0.3",
+  "answered_at": "2025-11-06",
+  "approved_at": "2025-11-06",
+  "approved_by": "l.fontaine@echoworx.example",
+  "audience": "customer",
+  "topic_ids": [
+    "dr_bcp",
+    "incident_response"
+  ]
+}

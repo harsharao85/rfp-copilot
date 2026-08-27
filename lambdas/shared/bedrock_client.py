@@ -20,17 +20,20 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-# SONNET: use 4.5 until aws-marketplace:Subscribe is granted to iamadmin for 4.6
-# To upgrade: change to "us.anthropic.claude-sonnet-4-6" and bump SHARED_VERSION
+# Cross-region inference profile IDs. Changing either is a model change, not a
+# refactor: bump SHARED_VERSION and update BEDROCK_INFERENCE_PROFILE_IDS in
+# infra/lib/orchestration-stack.ts, which derives the IAM grant from this list.
 SONNET = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 HAIKU = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 def _client() -> Any:
-    region = os.environ.get("AWS_REGION", "us-east-1")
+    # No region default. Lambda sets AWS_REGION; anywhere else boto3 resolves it
+    # from the caller's own config or AWS_DEFAULT_REGION. A literal fallback here
+    # would silently send traffic to a region the operator never chose.
     return boto3.client(
         "bedrock-runtime",
-        region_name=region,
+        region_name=os.environ.get("AWS_REGION") or None,
         config=Config(retries={"max_attempts": 5, "mode": "adaptive"}),
     )
 

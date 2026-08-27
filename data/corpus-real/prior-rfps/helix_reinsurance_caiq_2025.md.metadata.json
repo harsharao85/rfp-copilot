@@ -1,0 +1,20 @@
+{
+  "metadataAttributes": {
+    "document_id": "helix_reinsurance_caiq_2025",
+    "source_type": "prior_rfp",
+    "source_id": "prior_rfps",
+    "topic_ids": [
+      "soc2",
+      "pentest",
+      "sbom"
+    ],
+    "approved_at": "2025-09-22T00:00:00+00:00",
+    "approved_by": "l.fontaine@echoworx.example",
+    "answered_at": "2025-09-22T00:00:00+00:00",
+    "audience": "customer",
+    "customer_name": "Helix Reinsurance",
+    "customer_id": "cust-hxr-006",
+    "questionnaire_id": "caiq-v4-hxr-2025",
+    "questionnaire_name": "CAIQ v4.0.3"
+  }
+}

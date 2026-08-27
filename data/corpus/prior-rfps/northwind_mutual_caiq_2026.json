@@ -1,0 +1,17 @@
+{
+  "document_id": "northwind_mutual_caiq_2026",
+  "title": "Completed CAIQ extract \u2014 Northwind Mutual (encryption and key handling)",
+  "excerpt": "CAIQ v4.0.3 responses covering EKM-01 through EKM-04. Message bodies at rest are sealed with AES-256-GCM under per-message data keys wrapped by a tenant key-encryption key. Rotation runs on a 365-day cycle by default.",
+  "customer_name": "Northwind Mutual",
+  "customer_id": "cust-nwm-001",
+  "questionnaire_id": "caiq-v4-nwm-2026",
+  "questionnaire_name": "CAIQ v4.0.3",
+  "answered_at": "2026-05-12",
+  "approved_at": "2026-05-12",
+  "approved_by": "r.calloway@echoworx.example",
+  "audience": "customer",
+  "topic_ids": [
+    "encryption_at_rest",
+    "key_management"
+  ]
+}

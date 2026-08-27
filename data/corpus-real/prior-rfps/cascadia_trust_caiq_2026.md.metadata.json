@@ -1,0 +1,20 @@
+{
+  "metadataAttributes": {
+    "document_id": "cascadia_trust_caiq_2026",
+    "source_type": "prior_rfp",
+    "source_id": "prior_rfps",
+    "topic_ids": [
+      "sso",
+      "mfa",
+      "scim"
+    ],
+    "approved_at": "2026-04-02T00:00:00+00:00",
+    "approved_by": "d.mensah@echoworx.example",
+    "answered_at": "2026-04-02T00:00:00+00:00",
+    "audience": "customer",
+    "customer_name": "Cascadia Trust Bank",
+    "customer_id": "cust-ctb-002",
+    "questionnaire_id": "caiq-v4-ctb-2026",
+    "questionnaire_name": "CAIQ v4.0.3"
+  }
+}

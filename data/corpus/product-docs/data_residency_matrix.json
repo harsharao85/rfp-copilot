@@ -1,0 +1,11 @@
+{
+  "document_id": "data_residency_matrix",
+  "title": "Data Residency Matrix \u2014 Regions, Pinning and Cross-Border Transfer",
+  "excerpt": "Residency zones: Canada, United States, European Union, United Kingdom, and Australia. A tenant is pinned to one zone at provisioning. Message bodies, attachments, keys and derived indexes stay inside the elected zone; cross-zone transfer happens only where the tenant explicitly enables it.",
+  "updated_at": "2026-07-08",
+  "audience": "internal",
+  "topic_ids": [
+    "data_residency",
+    "gdpr"
+  ]
+}

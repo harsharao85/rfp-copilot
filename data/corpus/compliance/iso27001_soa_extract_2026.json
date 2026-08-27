@@ -1,0 +1,11 @@
+{
+  "document_id": "iso27001_soa_extract_2026",
+  "title": "ISO/IEC 27001:2022 Statement of Applicability \u2014 Extract",
+  "excerpt": "Extract from Statement of Applicability v6.1 against ISO/IEC 27001:2022 Annex A. Certificate ISMS-2026-04417, valid 2026-02-10 to 2029-02-09. Includes applicability decisions and justifications for the 93 Annex A controls.",
+  "updated_at": "2026-02-10",
+  "expires_on": "2029-02-09",
+  "audience": "certification",
+  "topic_ids": [
+    "iso27001"
+  ]
+}

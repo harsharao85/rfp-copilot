@@ -1,0 +1,10 @@
+{
+  "document_id": "scim_provisioning",
+  "title": "SCIM 2.0 User and Group Provisioning",
+  "excerpt": "A per-tenant SCIM 2.0 endpoint supports create, update, deactivate and reactivate for users and create, update and delete for groups. Deactivation takes effect immediately: live sessions end and issued tokens stop working.",
+  "updated_at": "2026-04-14",
+  "audience": "internal",
+  "topic_ids": [
+    "scim"
+  ]
+}

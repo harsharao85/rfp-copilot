@@ -1,0 +1,15 @@
+{
+  "metadataAttributes": {
+    "document_id": "sme-echoworx-0002",
+    "source_type": "sme_approved_answer",
+    "source_id": "sme_approved_answers",
+    "topic_ids": [],
+    "approved_at": "2026-07-14T00:00:00+00:00",
+    "approved_by": "d.mensah@echoworx.example",
+    "expires_on": "2027-07-14T00:00:00+00:00",
+    "question_text": "What administrative and delivery event records can a tenant export to its own SIEM, and in what format?",
+    "evidence_refs": [
+      "scim_provisioning"
+    ]
+  }
+}

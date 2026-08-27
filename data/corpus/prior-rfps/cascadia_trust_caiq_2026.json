@@ -1,0 +1,18 @@
+{
+  "document_id": "cascadia_trust_caiq_2026",
+  "title": "Completed CAIQ extract \u2014 Cascadia Trust Bank (identity and access)",
+  "excerpt": "CAIQ v4.0.3 responses covering IAM-01 through IAM-14. SAML 2.0 and OpenID Connect federation, WebAuthn and TOTP second factors, and SCIM 2.0 lifecycle provisioning with immediate deactivation.",
+  "customer_name": "Cascadia Trust Bank",
+  "customer_id": "cust-ctb-002",
+  "questionnaire_id": "caiq-v4-ctb-2026",
+  "questionnaire_name": "CAIQ v4.0.3",
+  "answered_at": "2026-04-02",
+  "approved_at": "2026-04-02",
+  "approved_by": "d.mensah@echoworx.example",
+  "audience": "customer",
+  "topic_ids": [
+    "sso",
+    "mfa",
+    "scim"
+  ]
+}

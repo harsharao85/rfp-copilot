@@ -1,0 +1,10 @@
+{
+  "document_id": "ssdlc_secure_development",
+  "title": "Secure Development Lifecycle \u2014 Design, Build and Release Controls",
+  "excerpt": "Every change carries a peer code review, static analysis, dependency composition analysis and container image scanning before it may merge. Threat models are produced per service and revisited when the trust boundary moves.",
+  "updated_at": "2026-06-22",
+  "audience": "internal",
+  "topic_ids": [
+    "ssdlc"
+  ]
+}

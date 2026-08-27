@@ -5,6 +5,10 @@ cdk.out/
 *.js.map
 infra/**/*.js
 !infra/jest.config.js
+# Account-bound and never committed: cdk.context.json caches account-scoped
+# lookups, outputs.json holds live ARNs from whichever account last deployed.
+cdk.context.json
+infra/outputs.json
 
 # Python
 __pycache__/
