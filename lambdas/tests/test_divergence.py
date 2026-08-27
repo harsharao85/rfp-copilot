@@ -1,12 +1,15 @@
 """Tests for provenance citation and retrospective divergence detection."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
 from divergence.detector import (
     ClaimRelation,
+    Comparator,
     DivergenceDetector,
     DivergenceKind,
     PriorStatement,
@@ -14,7 +17,7 @@ from divergence.detector import (
 from shared.models import Tier
 from shared.provenance import Provenance, render_citation
 
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 def prov(
@@ -22,7 +25,7 @@ def prov(
     customer_id: str | None = "cust-acme",
     days_ago: int = 30,
     expires_in: int | None = 365,
-    **kw,
+    **kw: Any,
 ) -> Provenance:
     return Provenance(
         document_id=kw.pop("document_id", "doc-1"),
@@ -45,40 +48,41 @@ def stmt(sid: str, answer: str, provenance: Provenance) -> PriorStatement:
     )
 
 
-def comparator(relation: ClaimRelation):
+def comparator(relation: ClaimRelation) -> Comparator:
     def _c(question: str, left: str, right: str) -> ClaimRelation:
         return relation
+
     return _c
 
 
 # -- citation rendering -----------------------------------------------------
 
 
-def test_citation_leads_with_customer_and_date():
-    line = render_citation(prov(
-        questionnaire_name="Vendor Security Assessment",
-        approved_by="R. Sandhu",
-    ))
+def test_citation_leads_with_customer_and_date() -> None:
+    line = render_citation(
+        prov(
+            questionnaire_name="Vendor Security Assessment",
+            approved_by="R. Sandhu",
+        )
+    )
     assert line.startswith("Prior answer — Acme Financial Corp")
     assert "Vendor Security Assessment" in line
     assert "approved by R. Sandhu" in line
 
 
-def test_expired_evidence_is_flagged_in_the_citation():
+def test_expired_evidence_is_flagged_in_the_citation() -> None:
     line = render_citation(prov(expires_in=-1))
     assert line.endswith("(EXPIRED)")
 
 
-def test_certification_and_public_audiences_do_not_name_a_customer():
+def test_certification_and_public_audiences_do_not_name_a_customer() -> None:
     assert "Certification evidence" in render_citation(
         prov(customer=None, customer_id=None, audience="certification")
     )
-    assert "Published" in render_citation(
-        prov(customer=None, customer_id=None, audience="public")
-    )
+    assert "Published" in render_citation(prov(customer=None, customer_id=None, audience="public"))
 
 
-def test_internal_source_without_customer_still_renders():
+def test_internal_source_without_customer_still_renders() -> None:
     line = render_citation(prov(customer=None, customer_id=None, audience="internal"))
     assert "Internal documentation" in line
 
@@ -86,7 +90,7 @@ def test_internal_source_without_customer_still_renders():
 # -- sidecar round trip -----------------------------------------------------
 
 
-def test_customer_name_survives_the_sidecar_round_trip():
+def test_customer_name_survives_the_sidecar_round_trip() -> None:
     original = prov(questionnaire_id="vsa-2026-014", approved_by="R. Sandhu")
     restored = Provenance.from_sidecar(original.to_sidecar())
     assert restored.customer_name == "Acme Financial Corp"
@@ -94,14 +98,14 @@ def test_customer_name_survives_the_sidecar_round_trip():
     assert restored.questionnaire_id == "vsa-2026-014"
 
 
-def test_sidecar_dates_are_iso_strings_so_filters_compare_lexically():
+def test_sidecar_dates_are_iso_strings_so_filters_compare_lexically() -> None:
     side = prov().to_sidecar()
     assert isinstance(side["answered_at"], str)
     # Lexical comparison is what makes a KB metadata filter on date work.
     assert side["answered_at"] > "2020-01-01"
 
 
-def test_sidecar_stays_well_under_the_s3_vectors_metadata_budget():
+def test_sidecar_stays_well_under_the_s3_vectors_metadata_budget() -> None:
     side = prov(
         questionnaire_name="Vendor Security Assessment 2026",
         approved_by="R. Sandhu",
@@ -111,7 +115,7 @@ def test_sidecar_stays_well_under_the_s3_vectors_metadata_budget():
     assert len(repr(side).encode()) < 2048
 
 
-def test_sidecar_omits_empty_fields_rather_than_emitting_nulls():
+def test_sidecar_omits_empty_fields_rather_than_emitting_nulls() -> None:
     side = prov(customer=None, customer_id=None).to_sidecar()
     assert "customer_name" not in side
     assert "customer_id" not in side
@@ -120,7 +124,7 @@ def test_sidecar_omits_empty_fields_rather_than_emitting_nulls():
 # -- the classification matrix ----------------------------------------------
 
 
-def test_two_customers_contradicting_in_the_same_period_is_red():
+def test_two_customers_contradicting_in_the_same_period_is_red() -> None:
     a = stmt("a", "Keys rotate annually.", prov("Acme Financial Corp", "cust-acme", 10))
     b = stmt("b", "Keys rotate quarterly.", prov("Northwind Traders", "cust-nw", 40))
 
@@ -133,7 +137,7 @@ def test_two_customers_contradicting_in_the_same_period_is_red():
     assert "Northwind Traders" in report.findings[0].detail
 
 
-def test_two_customers_contradicting_years_apart_is_amber_not_red():
+def test_two_customers_contradicting_years_apart_is_amber_not_red() -> None:
     a = stmt("a", "Keys rotate annually.", prov("Acme Financial Corp", "cust-acme", 900))
     b = stmt("b", "Keys rotate quarterly.", prov("Northwind Traders", "cust-nw", 20))
 
@@ -143,7 +147,7 @@ def test_two_customers_contradicting_years_apart_is_amber_not_red():
     assert report.tier_floor is Tier.AMBER
 
 
-def test_same_customer_contradiction_is_red_even_when_far_apart():
+def test_same_customer_contradiction_is_red_even_when_far_apart() -> None:
     # They hold both documents. Time does not soften it.
     a = stmt("a", "Keys rotate annually.", prov("Acme Financial Corp", "cust-acme", 900))
     b = stmt("b", "Keys rotate quarterly.", prov("Acme Financial Corp", "cust-acme", 20))
@@ -154,7 +158,7 @@ def test_same_customer_contradiction_is_red_even_when_far_apart():
     assert report.tier_floor is Tier.RED
 
 
-def test_customer_grouping_uses_stable_id_not_display_name():
+def test_customer_grouping_uses_stable_id_not_display_name() -> None:
     # Same customer, renamed after acquisition. Must not read as two parties.
     a = stmt("a", "Annually.", prov("Acme Financial Corp", "cust-acme", 400))
     b = stmt("b", "Quarterly.", prov("Acme Financial (a Globex company)", "cust-acme", 10))
@@ -164,7 +168,7 @@ def test_customer_grouping_uses_stable_id_not_display_name():
     assert report.findings[0].kind is DivergenceKind.SELF_CONTRADICTION
 
 
-def test_agreement_produces_no_finding():
+def test_agreement_produces_no_finding() -> None:
     a = stmt("a", "Keys rotate annually.", prov("Acme Financial Corp", "cust-acme", 10))
     b = stmt("b", "Keys are rotated once a year.", prov("Northwind Traders", "cust-nw", 20))
 
@@ -175,7 +179,7 @@ def test_agreement_produces_no_finding():
     assert report.compared_pairs == 1
 
 
-def test_unrelated_answers_produce_no_finding():
+def test_unrelated_answers_produce_no_finding() -> None:
     a = stmt("a", "Keys rotate annually.", prov("Acme Financial Corp", "cust-acme", 10))
     b = stmt("b", "We run quarterly pen tests.", prov("Northwind Traders", "cust-nw", 20))
 
@@ -187,7 +191,7 @@ def test_unrelated_answers_produce_no_finding():
 # -- failure and edge behaviour ---------------------------------------------
 
 
-def test_uncertain_comparator_does_not_read_as_agreement():
+def test_uncertain_comparator_does_not_read_as_agreement() -> None:
     a = stmt("a", "Keys rotate annually.", prov("Acme Financial Corp", "cust-acme", 10))
     b = stmt("b", "Rotation is automated.", prov("Northwind Traders", "cust-nw", 20))
 
@@ -197,8 +201,8 @@ def test_uncertain_comparator_does_not_read_as_agreement():
     assert report.tier_floor is Tier.AMBER
 
 
-def test_comparator_exception_fails_to_uncertain_not_to_clean():
-    def exploding(question, left, right):
+def test_comparator_exception_fails_to_uncertain_not_to_clean() -> None:
+    def exploding(question: str, left: str, right: str) -> ClaimRelation:
         raise RuntimeError("bedrock throttled")
 
     a = stmt("a", "Annually.", prov("Acme Financial Corp", "cust-acme", 10))
@@ -209,7 +213,7 @@ def test_comparator_exception_fails_to_uncertain_not_to_clean():
     assert report.tier_floor is Tier.AMBER, "a failed comparison is not a pass"
 
 
-def test_consistent_but_wholly_expired_priors_are_flagged():
+def test_consistent_but_wholly_expired_priors_are_flagged() -> None:
     a = stmt("a", "Annually.", prov("Acme Financial Corp", "cust-acme", 800, expires_in=-30))
     b = stmt("b", "Annually.", prov("Northwind Traders", "cust-nw", 700, expires_in=-10))
 
@@ -219,25 +223,25 @@ def test_consistent_but_wholly_expired_priors_are_flagged():
     assert report.tier_floor is Tier.AMBER
 
 
-def test_single_unexpired_prior_is_clean():
+def test_single_unexpired_prior_is_clean() -> None:
     a = stmt("a", "Annually.", prov("Acme Financial Corp", "cust-acme", 10))
     report = DivergenceDetector(comparator(ClaimRelation.AGREE)).detect([a])
     assert report.findings == []
 
 
-def test_single_expired_prior_is_flagged():
+def test_single_expired_prior_is_flagged() -> None:
     a = stmt("a", "Annually.", prov("Acme Financial Corp", "cust-acme", 800, expires_in=-30))
     report = DivergenceDetector(comparator(ClaimRelation.AGREE)).detect([a])
     assert report.findings[0].kind is DivergenceKind.STALE_CONSENSUS
 
 
-def test_empty_input_is_clean():
+def test_empty_input_is_clean() -> None:
     report = DivergenceDetector(comparator(ClaimRelation.AGREE)).detect([])
     assert report.findings == []
     assert report.statements_examined == 0
 
 
-def test_pair_count_is_capped_to_bound_model_spend():
+def test_pair_count_is_capped_to_bound_model_spend() -> None:
     many = [
         stmt(f"s{i}", f"Answer {i}.", prov(f"Customer {i}", f"cust-{i}", i + 1))
         for i in range(30)  # 435 unbounded pairs
@@ -247,7 +251,7 @@ def test_pair_count_is_capped_to_bound_model_spend():
     assert report.compared_pairs == 25
 
 
-def test_red_dominates_amber_in_the_report_floor():
+def test_red_dominates_amber_in_the_report_floor() -> None:
     a = stmt("a", "Annually.", prov("Acme Financial Corp", "cust-acme", 10))
     b = stmt("b", "Quarterly.", prov("Acme Financial Corp", "cust-acme", 20))
     c = stmt("c", "Monthly.", prov("Northwind Traders", "cust-nw", 900))
@@ -262,7 +266,7 @@ def test_red_dominates_amber_in_the_report_floor():
 # -- reviewer-facing output --------------------------------------------------
 
 
-def test_finding_renders_a_scannable_reviewer_line():
+def test_finding_renders_a_scannable_reviewer_line() -> None:
     a = stmt("a", "Annually.", prov("Acme Financial Corp", "cust-acme", 10))
     b = stmt("b", "Quarterly.", prov("Northwind Traders", "cust-nw", 40))
     report = DivergenceDetector(comparator(ClaimRelation.CONTRADICT)).detect([a, b])
@@ -276,21 +280,17 @@ def test_finding_renders_a_scannable_reviewer_line():
     "days,phrase",
     [(0, "same day"), (14, "14 days apart"), (200, "months apart"), (900, "years apart")],
 )
-def test_time_gaps_are_described_in_human_terms(days, phrase):
+def test_time_gaps_are_described_in_human_terms(days: int, phrase: str) -> None:
     a = stmt("a", "Annually.", prov("Acme Financial Corp", "cust-acme", 1))
     b = stmt("b", "Quarterly.", prov("Northwind Traders", "cust-nw", 1 + days))
-    report = DivergenceDetector(
-        comparator(ClaimRelation.CONTRADICT), period_days=10
-    ).detect([a, b])
+    report = DivergenceDetector(comparator(ClaimRelation.CONTRADICT), period_days=10).detect([a, b])
     assert phrase in report.findings[0].detail
 
 
-def test_summary_is_serialisable_for_the_audit_record():
+def test_summary_is_serialisable_for_the_audit_record() -> None:
     a = stmt("a", "Annually.", prov("Acme Financial Corp", "cust-acme", 10))
     b = stmt("b", "Quarterly.", prov("Northwind Traders", "cust-nw", 40))
-    summary = DivergenceDetector(comparator(ClaimRelation.CONTRADICT)).detect(
-        [a, b]
-    ).summary
+    summary = DivergenceDetector(comparator(ClaimRelation.CONTRADICT)).detect([a, b]).summary
     assert summary["findings"] == 1
     assert summary["tier_floor"] == "red"
     assert summary["findings_by_kind"]["customer_divergence"] == 1

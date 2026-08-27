@@ -7,6 +7,7 @@
 Production use expects this to run inside a VPC with the Bedrock
 PrivateLink endpoint (see network-stack.ts).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -54,7 +55,9 @@ def check_output(text: str) -> dict[str, Any]:
         )
         if resp.get("action") == "GUARDRAIL_INTERVENED":
             outputs = resp.get("outputs", [])
-            blocked_msg = outputs[0]["text"] if outputs else "Response blocked by policy. An SME will review."
+            blocked_msg = (
+                outputs[0]["text"] if outputs else "Response blocked by policy. An SME will review."
+            )
             return {"blocked": True, "text": blocked_msg}
         return {"blocked": False, "text": text}
     except ClientError:
@@ -69,7 +72,7 @@ def invoke(
     max_tokens: int = 1024,
     temperature: float = 0.2,
     cache_system: bool = True,
-    apply_guardrail: bool = False,
+    apply_guardrail: bool = False,  # noqa: ARG001 — see docstring
 ) -> dict[str, Any]:
     """Invoke a Claude model on Bedrock. Returns a dict with `text`,
     `model_id`, `prompt_hash`, `response_hash`, and `usage`.

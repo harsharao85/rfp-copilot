@@ -33,9 +33,10 @@ Composite thresholds (used for UNCLASSIFIED only now):
 Hard rules run AFTER this scorer and can only demote (pricing → RED,
 compliance claim without citation → min AMBER, etc.).
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from shared.models import (
     ConfidenceBreakdown,
@@ -59,7 +60,7 @@ def score_h(prior_matches: list[PriorAnswerMatch]) -> float:
     if not prior_matches:
         return 0.0
     best = max(prior_matches, key=lambda m: m.similarity)
-    if best.expires_on and best.expires_on < datetime.now(timezone.utc):
+    if best.expires_on and best.expires_on < datetime.now(UTC):
         return best.similarity * 0.5  # expired: halve the signal
     return best.similarity
 
@@ -90,7 +91,7 @@ def score_f(passages: list[RetrievedPassage]) -> float:
     Passages must carry an 'updated_at' metadata attribute (ISO date)."""
     if not passages:
         return 0.2
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     best = 0.2
     for p in passages:
         raw = p.metadata.get("updated_at")
@@ -99,7 +100,7 @@ def score_f(passages: list[RetrievedPassage]) -> float:
         try:
             dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
         except (ValueError, TypeError):
             continue
         age_days = (now - dt).days

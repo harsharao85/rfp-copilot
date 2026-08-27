@@ -23,10 +23,11 @@ allows, keep it out of the prose. Where it is unavoidably in the prose
 duplication is harmless, and rewriting source text to remove it would damage
 the very lineage we are trying to preserve.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Literal
+from datetime import UTC, datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -34,11 +35,11 @@ __all__ = ["Provenance", "Citation", "render_citation", "AnswerAudience"]
 
 
 AnswerAudience = Literal[
-    "customer",        # answered to a named customer in a questionnaire
-    "prospect",        # answered during a sales cycle, may never have closed
-    "internal",        # internal policy or control documentation
-    "public",          # trust portal / published material
-    "certification",   # SOC 2, ISO 27001 and similar attestations
+    "customer",  # answered to a named customer in a questionnaire
+    "prospect",  # answered during a sales cycle, may never have closed
+    "internal",  # internal policy or control documentation
+    "public",  # trust portal / published material
+    "certification",  # SOC 2, ISO 27001 and similar attestations
 ]
 
 
@@ -52,11 +53,11 @@ class Provenance(BaseModel):
     """
 
     document_id: str
-    source_id: str                       # which configured source produced this
+    source_id: str  # which configured source produced this
     audience: AnswerAudience = "internal"
 
-    customer_name: str | None = None     # display name, used in citations
-    customer_id: str | None = None       # stable key, survives renames
+    customer_name: str | None = None  # display name, used in citations
+    customer_id: str | None = None  # stable key, survives renames
 
     questionnaire_id: str | None = None
     questionnaire_name: str | None = None
@@ -73,16 +74,16 @@ class Provenance(BaseModel):
     def is_expired(self) -> bool:
         if self.expires_on is None:
             return False
-        return self.expires_on < datetime.now(timezone.utc)
+        return self.expires_on < datetime.now(UTC)
 
     @property
     def age_days(self) -> int | None:
         anchor = self.answered_at or self.approved_at
         if anchor is None:
             return None
-        return (datetime.now(timezone.utc) - anchor).days
+        return (datetime.now(UTC) - anchor).days
 
-    def to_sidecar(self) -> dict:
+    def to_sidecar(self) -> dict[str, Any]:
         """Flatten into Bedrock KB sidecar attributes.
 
         Kept flat and small: S3 Vectors caps filterable metadata at 2 KB per
@@ -120,7 +121,7 @@ class Provenance(BaseModel):
         return attrs
 
     @classmethod
-    def from_sidecar(cls, attrs: dict) -> "Provenance":
+    def from_sidecar(cls, attrs: dict[str, Any]) -> Provenance:
         def _dt(key: str) -> datetime | None:
             raw = attrs.get(key)
             if not raw:

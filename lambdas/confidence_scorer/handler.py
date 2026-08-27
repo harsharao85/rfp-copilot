@@ -1,9 +1,11 @@
 """Lambda handler for confidence scoring."""
+
 from __future__ import annotations
 
 from typing import Any
 
 from scorer import score
+
 from shared.logging_config import bind_job_context, configure_logging
 from shared.models import GeneratedAnswer, PriorAnswerMatch, RetrievedPassage
 
@@ -30,8 +32,13 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         topic_class=topic_class,
     )
 
-    log.info("score.computed", topic_class=topic_class, composite=composite,
-             tier=tier.value, **breakdown.model_dump())
+    log.info(
+        "score.computed",
+        topic_class=topic_class,
+        composite=composite,
+        tier=tier.value,
+        **breakdown.model_dump(),
+    )
 
     return {
         "composite": composite,

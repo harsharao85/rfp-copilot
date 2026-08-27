@@ -13,6 +13,7 @@ S3 keys get re-embedded — so triggering on every PutObject is safe. If another
 ingestion job is already running, ConflictException is caught and logged; the
 changes will be picked up by the next trigger.
 """
+
 from __future__ import annotations
 
 import os
@@ -43,7 +44,8 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
     try:
         resp = bedrock_agent.start_ingestion_job(
-            knowledgeBaseId=kb_id, dataSourceId=ds_id,
+            knowledgeBaseId=kb_id,
+            dataSourceId=ds_id,
         )
         job_id = resp["ingestionJob"]["ingestionJobId"]
         logger.info("ingestion_trigger.started", source=source, ingestion_job_id=job_id)

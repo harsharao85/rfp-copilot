@@ -15,6 +15,7 @@ The response is a JSON object conforming to GeneratedAnswer — the
 answer_text + citations + invoked_customers + any risk flags the
 model noticed. We never trust the model's self-reported confidence.
 """
+
 from __future__ import annotations
 
 import json

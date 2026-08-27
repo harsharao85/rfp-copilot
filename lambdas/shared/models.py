@@ -4,6 +4,7 @@ These define the typed envelope that flows between Step Functions states.
 Keep them small and stable — Step Functions JSON payloads are not
 forgiving of schema drift.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -29,6 +30,7 @@ class Tier(str, Enum):
 class CellRef(BaseModel):
     """Addresses back to the original workbook so the writer can
     surgically update cells without rebuilding the sheet."""
+
     sheet: str
     coordinate: str  # e.g. "B12"
 
@@ -47,8 +49,15 @@ class Question(BaseModel):
 
 class RetrievedPassage(BaseModel):
     source_system: Literal[
-        "historical_rfp", "whitepaper", "seismic", "gong", "cms", "confluence",
-        "compliance", "sme_approved", "other"
+        "historical_rfp",
+        "whitepaper",
+        "seismic",
+        "gong",
+        "cms",
+        "confluence",
+        "compliance",
+        "sme_approved",
+        "other",
     ]
     document_id: str
     excerpt: str
@@ -85,6 +94,7 @@ class DispatchPlan(BaseModel):
     secondary: phrasing reference only (prior RFPs). Never factual authority.
     tertiary:  contextual enrichment (Seismic, Gong) — optional, circuit-broken.
     """
+
     topic_class: str = "unclassified"
     primary: list[str] = Field(default_factory=list)
     secondary: list[str] = Field(default_factory=list)
@@ -95,6 +105,7 @@ class DispatchPlan(BaseModel):
 
 class PriorAnswerMatch(BaseModel):
     """SME-approved prior answer from the LibraryFeedback corpus."""
+
     answer_id: str
     question_text: str
     answer_text: str
@@ -131,6 +142,7 @@ class GeneratedAnswer(BaseModel):
 
 class ConfidenceBreakdown(BaseModel):
     """Per v0.4 plan §5.7 — composite with explainable components."""
+
     h: float = Field(ge=0.0, le=1.0, description="Prior-answer match similarity")
     r: float = Field(ge=0.0, le=1.0, description="Retrieval strength (top-K normalized)")
     c: float = Field(ge=0.0, le=1.0, description="Source coverage")

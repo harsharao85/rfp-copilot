@@ -4,6 +4,7 @@ These tests encode enterprise-legal constraints. Any change that breaks
 them is a policy change and must be reviewed by General Counsel — not
 a refactor. Do not relax these assertions to make tests pass.
 """
+
 from __future__ import annotations
 
 from hard_rules.rules import apply_rules

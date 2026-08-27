@@ -9,9 +9,10 @@ Four seams, one file:
 The recurring assertion across all four is the same one: nothing here may make
 an answer look cleaner than the evidence supports.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -31,12 +32,13 @@ from retriever.handler import _knowledge_base_retrieve
 from shared.models import CellRef, ConfidenceBreakdown, FinalAnswer, Tier
 from shared.provenance import Citation, Provenance
 
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 # ---------------------------------------------------------------------------
 # 1. retriever/handler.py — hydrate RetrievedPassage.metadata into Provenance
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def _kb_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,7 +87,7 @@ def test_full_sidecar_becomes_typed_provenance(mock_client: MagicMock) -> None:
     assert prov.customer_name == "Acme Financial Corp"
     assert prov.customer_id == "cust-acme"
     assert prov.audience == "customer"
-    assert prov.answered_at == datetime(2026, 3, 11, tzinfo=timezone.utc)
+    assert prov.answered_at == datetime(2026, 3, 11, tzinfo=UTC)
     assert prov.approved_by == "R. Sandhu"
     assert prov.is_expired is False
     # The whole sidecar still travels as raw metadata, including list values.
@@ -225,6 +227,7 @@ def test_pricing_red_survives_an_amber_divergence_floor() -> None:
 
 def test_detector_report_floor_feeds_the_rule_end_to_end() -> None:
     """The two halves meet: a real DivergenceReport drives a real tier."""
+
     def prov(customer: str, cust_id: str, days_ago: int) -> Provenance:
         return Provenance(
             document_id=f"doc-{cust_id}-{days_ago}",
@@ -236,10 +239,18 @@ def test_detector_report_floor_feeds_the_rule_end_to_end() -> None:
         )
 
     statements = [
-        PriorStatement("s1", "Key rotation?", "Keys rotate annually.",
-                       prov("Acme Financial Corp", "cust-acme", 20)),
-        PriorStatement("s2", "Key rotation?", "Keys rotate every 90 days.",
-                       prov("Northwind Capital", "cust-northwind", 30)),
+        PriorStatement(
+            "s1",
+            "Key rotation?",
+            "Keys rotate annually.",
+            prov("Acme Financial Corp", "cust-acme", 20),
+        ),
+        PriorStatement(
+            "s2",
+            "Key rotation?",
+            "Keys rotate every 90 days.",
+            prov("Northwind Capital", "cust-northwind", 30),
+        ),
     ]
     report = DivergenceDetector(lambda *_: ClaimRelation.CONTRADICT).detect(statements)
 
@@ -261,6 +272,7 @@ def test_detector_report_floor_feeds_the_rule_end_to_end() -> None:
 # 3. excel_writer/writer.py — render citations + findings into the comment
 # ---------------------------------------------------------------------------
 
+
 def _answer(**kw: Any) -> FinalAnswer:
     defaults: dict[str, Any] = dict(
         question_id="q1",
@@ -279,16 +291,20 @@ def _answer(**kw: Any) -> FinalAnswer:
 
 
 def _citation(**kw: Any) -> Citation:
-    return Citation(provenance=Provenance(**{
-        "document_id": "acme_vsa_2026",
-        "source_id": "golden-questionnaire",
-        "audience": "customer",
-        "customer_name": "Acme Financial Corp",
-        "questionnaire_name": "Vendor Security Assessment",
-        "answered_at": datetime(2026, 3, 11, tzinfo=timezone.utc),
-        "approved_by": "R. Sandhu",
-        **kw,
-    }))
+    return Citation(
+        provenance=Provenance(
+            **{
+                "document_id": "acme_vsa_2026",
+                "source_id": "golden-questionnaire",
+                "audience": "customer",
+                "customer_name": "Acme Financial Corp",
+                "questionnaire_name": "Vendor Security Assessment",
+                "answered_at": datetime(2026, 3, 11, tzinfo=UTC),
+                "approved_by": "R. Sandhu",
+                **kw,
+            }
+        )
+    )
 
 
 def test_comment_renders_the_citation_line_not_the_document_id() -> None:
@@ -305,13 +321,15 @@ def test_comment_falls_back_to_document_ids_without_provenance() -> None:
 
 
 def test_comment_leads_with_divergence_findings() -> None:
-    body = _comment_body(_answer(
-        divergence_findings=[
-            "[CUSTOMER DIVERGENCE] Acme Financial Corp and Northwind Capital were "
-            "given contradictory answers 10 days apart.",
-        ],
-        citations_detailed=[_citation()],
-    ))
+    body = _comment_body(
+        _answer(
+            divergence_findings=[
+                "[CUSTOMER DIVERGENCE] Acme Financial Corp and Northwind Capital were "
+                "given contradictory answers 10 days apart.",
+            ],
+            citations_detailed=[_citation()],
+        )
+    )
     lines = body.splitlines()
     assert "Divergence across prior answers:" in lines
     # Ahead of confidence and sources — an SME who reads one block reads this one.
@@ -330,15 +348,18 @@ def test_comment_truncates_long_finding_lists_visibly() -> None:
 
 
 def test_expired_source_keeps_its_marker_in_the_comment() -> None:
-    body = _comment_body(_answer(
-        citations_detailed=[_citation(expires_on=NOW - timedelta(days=1))],
-    ))
+    body = _comment_body(
+        _answer(
+            citations_detailed=[_citation(expires_on=NOW - timedelta(days=1))],
+        )
+    )
     assert "(EXPIRED)" in body
 
 
 # ---------------------------------------------------------------------------
 # 4. divergence/comparator.py — the narrow Haiku call
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "reply,expected",
@@ -348,7 +369,7 @@ def test_expired_source_keeps_its_marker_in_the_comment() -> None:
         ("UNRELATED.", ClaimRelation.UNRELATED),
         ("uncertain", ClaimRelation.UNCERTAIN),
         ("The answers appear to AGREE.", ClaimRelation.AGREE),
-        ("banana", ClaimRelation.UNCERTAIN),          # unrecognised
+        ("banana", ClaimRelation.UNCERTAIN),  # unrecognised
         ("AGREE or UNRELATED", ClaimRelation.UNCERTAIN),  # two calls is no call
         ("", ClaimRelation.UNCERTAIN),
         (None, ClaimRelation.UNCERTAIN),
@@ -415,19 +436,25 @@ def test_throttled_comparator_still_produces_an_amber_finding(
 ) -> None:
     """End to end: a broken comparator must not read as a clean answer."""
     import shared.bedrock_client as bc
+
     monkeypatch.setattr(bc, "invoke", lambda **_: (_ for _ in ()).throw(RuntimeError("throttled")))
 
     def prov(cust: str) -> Provenance:
         return Provenance(
-            document_id=f"doc-{cust}", source_id="golden-questionnaire",
-            audience="customer", customer_name=cust, customer_id=cust,
+            document_id=f"doc-{cust}",
+            source_id="golden-questionnaire",
+            audience="customer",
+            customer_name=cust,
+            customer_id=cust,
             answered_at=NOW - timedelta(days=10),
         )
 
-    report = DivergenceDetector(BedrockComparator()).detect([
-        PriorStatement("s1", "Key rotation?", "Annually.", prov("acme")),
-        PriorStatement("s2", "Key rotation?", "Every 90 days.", prov("northwind")),
-    ])
+    report = DivergenceDetector(BedrockComparator()).detect(
+        [
+            PriorStatement("s1", "Key rotation?", "Annually.", prov("acme")),
+            PriorStatement("s2", "Key rotation?", "Every 90 days.", prov("northwind")),
+        ]
+    )
 
     assert report.tier_floor is Tier.AMBER
     assert report.findings[0].kind is DivergenceKind.UNRESOLVED_DIVERGENCE
@@ -535,19 +562,23 @@ def test_citations_survive_the_dynamodb_round_trip(monkeypatch: pytest.MonkeyPat
 
     event = {
         "generation": {"citations": ["acme_vsa_2026", "not_retrieved"]},
-        "retrieval": {"passages": [{
-            "document_id": "acme_vsa_2026",
-            "excerpt": "Keys rotate annually." * 40,
-            "score": 0.8123,
-            "provenance": Provenance(
-                document_id="acme_vsa_2026",
-                source_id="golden-questionnaire",
-                audience="customer",
-                customer_name="Acme Financial Corp",
-                answered_at=datetime(2026, 3, 11, tzinfo=timezone.utc),
-                approved_by="R. Sandhu",
-            ).model_dump(mode="json"),
-        }]},
+        "retrieval": {
+            "passages": [
+                {
+                    "document_id": "acme_vsa_2026",
+                    "excerpt": "Keys rotate annually." * 40,
+                    "score": 0.8123,
+                    "provenance": Provenance(
+                        document_id="acme_vsa_2026",
+                        source_id="golden-questionnaire",
+                        audience="customer",
+                        customer_name="Acme Financial Corp",
+                        answered_at=datetime(2026, 3, 11, tzinfo=UTC),
+                        approved_by="R. Sandhu",
+                    ).model_dump(mode="json"),
+                }
+            ]
+        },
     }
 
     written = hard_rules_handler._f2d(hard_rules_handler._detailed_citations(event))
@@ -590,3 +621,50 @@ def _contains_float(obj: Any) -> bool:
     if isinstance(obj, list):
         return any(_contains_float(v) for v in obj)
     return False
+
+
+# ---------------------------------------------------------------------------
+# 6. Coverage gap: the mock-sources URL builder had no test
+#
+# mypy flagged `urllib.request.quote` as a missing attribute, which looked at
+# first like a live AttributeError. It is not — urllib.request re-exports
+# quote from urllib.parse, so it worked; typeshed just does not mark it as a
+# re-export. The call now says urllib.parse.quote because that is where the
+# function actually lives, and this test exists because chasing that turned up
+# a genuinely untested path: nothing anywhere asserted what URL the Seismic
+# and Gong lookups build, or that the query string is encoded at all.
+# ---------------------------------------------------------------------------
+
+
+def test_mock_source_url_is_built_and_query_is_encoded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from retriever.handler import _mock_api_passages
+
+    monkeypatch.setenv("MOCK_SOURCES_API_URL", "https://mock.example.test")
+    captured: dict[str, Any] = {}
+
+    class _Resp:
+        status = 200
+
+        def read(self) -> bytes:
+            return b'{"results": []}'
+
+        def __enter__(self) -> _Resp:
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+    def fake_urlopen(req: Any, timeout: int = 3) -> _Resp:
+        captured["url"] = req.full_url
+        return _Resp()
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    assert _mock_api_passages("seismic", "key rotation & storage") == []
+    assert captured["url"].startswith("https://mock.example.test/seismic/content?")
+    # Encoded, not raw — a bare & would truncate the query server-side.
+    assert "key%20rotation%20%26%20storage" in captured["url"]

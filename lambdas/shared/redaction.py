@@ -34,15 +34,18 @@ rather than passing it through. Once a raw identifier is embedded into the
 vector index, removing it means a full re-ingest; there is no partial delete
 that is cheap or provable. Fail-open is not an option worth the convenience.
 """
+
 from __future__ import annotations
 
 import hashlib
 import hmac
 import os
 import re
+from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable, Sequence
+from typing import Any
 
 __all__ = [
     "CITATION_SAFE",
@@ -86,11 +89,40 @@ class EntityClass(str, Enum):
 # token. Without this the same customer fragments across several tokens and
 # the cross-document guarantee above quietly stops holding.
 _LEGAL_SUFFIXES = (
-    "incorporated", "inc", "corporation", "corp", "company", "co",
-    "limited", "ltd", "llc", "llp", "lp", "plc", "gmbh", "ag", "sa", "nv",
-    "bv", "pty", "pte", "srl", "spa", "oy", "ab", "as", "kk", "holdings",
-    "group", "international", "technologies", "technology", "systems",
-    "solutions", "services", "software",
+    "incorporated",
+    "inc",
+    "corporation",
+    "corp",
+    "company",
+    "co",
+    "limited",
+    "ltd",
+    "llc",
+    "llp",
+    "lp",
+    "plc",
+    "gmbh",
+    "ag",
+    "sa",
+    "nv",
+    "bv",
+    "pty",
+    "pte",
+    "srl",
+    "spa",
+    "oy",
+    "ab",
+    "as",
+    "kk",
+    "holdings",
+    "group",
+    "international",
+    "technologies",
+    "technology",
+    "systems",
+    "solutions",
+    "services",
+    "software",
 )
 
 _PUNCT = re.compile(r"[^\w\s]")
@@ -120,9 +152,7 @@ def normalise_entity(raw: str) -> str:
 # --------------------------------------------------------------------------
 
 _PATTERNS: dict[EntityClass, re.Pattern[str]] = {
-    EntityClass.EMAIL: re.compile(
-        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
-    ),
+    EntityClass.EMAIL: re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     # E.164 and common NA/EU formats. Deliberately not greedy about bare
     # digit runs -- version strings and port numbers are not phone numbers.
     # The trailing guard is deliberately `(?![-\w]|\.\d)` and not `(?![\w.])`.
@@ -173,10 +203,10 @@ class Finding:
     entity_class: EntityClass
     start: int
     end: int
-    surface: str          # the literal matched text
-    canonical: str        # normalised form used to derive the token
-    confidence: float     # 1.0 for pattern/dictionary hits
-    detector: str         # "dictionary" | "pattern" | "comprehend"
+    surface: str  # the literal matched text
+    canonical: str  # normalised form used to derive the token
+    confidence: float  # 1.0 for pattern/dictionary hits
+    detector: str  # "dictionary" | "pattern" | "comprehend"
 
     @property
     def length(self) -> int:
@@ -209,10 +239,16 @@ STRICT = RedactionProfile(
 
 STANDARD = RedactionProfile(
     name="standard",
-    classes=frozenset({
-        EntityClass.CUSTOMER, EntityClass.PERSON, EntityClass.EMAIL,
-        EntityClass.PHONE, EntityClass.CREDENTIAL, EntityClass.CONTRACT,
-    }),
+    classes=frozenset(
+        {
+            EntityClass.CUSTOMER,
+            EntityClass.PERSON,
+            EntityClass.EMAIL,
+            EntityClass.PHONE,
+            EntityClass.CREDENTIAL,
+            EntityClass.CONTRACT,
+        }
+    ),
     use_ml_detection=True,
     confidence_floor=0.75,
     review_threshold=0.90,
@@ -232,11 +268,15 @@ STANDARD = RedactionProfile(
 # obligation nobody signed up for. Credentials go for the obvious reason.
 CITATION_SAFE = RedactionProfile(
     name="citation_safe",
-    classes=frozenset({
-        EntityClass.PERSON, EntityClass.EMAIL, EntityClass.PHONE,
-        EntityClass.CREDENTIAL,
-    }),
-    use_ml_detection=False,   # dictionary + patterns only; no Comprehend spend
+    classes=frozenset(
+        {
+            EntityClass.PERSON,
+            EntityClass.EMAIL,
+            EntityClass.PHONE,
+            EntityClass.CREDENTIAL,
+        }
+    ),
+    use_ml_detection=False,  # dictionary + patterns only; no Comprehend spend
     confidence_floor=0.75,
     review_threshold=0.90,
 )
@@ -251,9 +291,7 @@ OFF = RedactionProfile(
     review_threshold=0.0,
 )
 
-PROFILES: dict[str, RedactionProfile] = {
-    p.name: p for p in (STRICT, STANDARD, CITATION_SAFE, OFF)
-}
+PROFILES: dict[str, RedactionProfile] = {p.name: p for p in (STRICT, STANDARD, CITATION_SAFE, OFF)}
 
 
 @dataclass
@@ -267,7 +305,7 @@ class RedactionResult:
     quarantine_reason: str | None = None
 
     @property
-    def manifest(self) -> dict:
+    def manifest(self) -> dict[str, Any]:
         """Auditable record of what was removed. Carries no raw surfaces --
         only classes, offsets and tokens -- so the manifest itself is safe to
         store alongside the sanitised corpus and to show a customer as
@@ -303,11 +341,13 @@ class Redactor:
         self,
         secret: bytes | None = None,
         known_entities: dict[str, EntityClass] | None = None,
-        ml_detect=None,
+        ml_detect: (Callable[[str, AbstractSet[EntityClass]], Iterable[Finding]] | None) = None,
     ) -> None:
-        self._secret = secret or os.environ.get(
-            "REDACTION_HMAC_SECRET", ""
-        ).encode() or b"dev-only-insecure-secret"
+        self._secret = (
+            secret
+            or os.environ.get("REDACTION_HMAC_SECRET", "").encode()
+            or b"dev-only-insecure-secret"
+        )
         self._known = known_entities or {}
         self._ml_detect = ml_detect
         self._issued: dict[str, str] = {}  # canonical -> token, collision guard
@@ -315,11 +355,15 @@ class Redactor:
     # -- token derivation ---------------------------------------------------
 
     def token_for(self, canonical: str, entity_class: EntityClass) -> str:
-        digest = hmac.new(
-            self._secret,
-            f"{entity_class.value}:{canonical}".encode(),
-            hashlib.sha256,
-        ).hexdigest().upper()
+        digest = (
+            hmac.new(
+                self._secret,
+                f"{entity_class.value}:{canonical}".encode(),
+                hashlib.sha256,
+            )
+            .hexdigest()
+            .upper()
+        )
 
         token = f"[{entity_class.value}_{digest[:_TOKEN_WIDTH]}]"
         prior = self._issued.get(token)
@@ -332,9 +376,7 @@ class Redactor:
 
     # -- detection ----------------------------------------------------------
 
-    def _dictionary_findings(
-        self, text: str, profile: RedactionProfile
-    ) -> list[Finding]:
+    def _dictionary_findings(self, text: str, profile: RedactionProfile) -> list[Finding]:
         out: list[Finding] = []
         # Longest first so "Acme Financial Corp" wins over "Acme".
         for name in sorted(self._known, key=len, reverse=True):
@@ -342,19 +384,20 @@ class Redactor:
             if entity_class not in profile.classes:
                 continue
             for m in re.finditer(rf"\b{re.escape(name)}\b", text, re.IGNORECASE):
-                out.append(Finding(
-                    entity_class=entity_class,
-                    start=m.start(), end=m.end(),
-                    surface=m.group(0),
-                    canonical=normalise_entity(m.group(0)),
-                    confidence=1.0,
-                    detector="dictionary",
-                ))
+                out.append(
+                    Finding(
+                        entity_class=entity_class,
+                        start=m.start(),
+                        end=m.end(),
+                        surface=m.group(0),
+                        canonical=normalise_entity(m.group(0)),
+                        confidence=1.0,
+                        detector="dictionary",
+                    )
+                )
         return out
 
-    def _pattern_findings(
-        self, text: str, profile: RedactionProfile
-    ) -> list[Finding]:
+    def _pattern_findings(self, text: str, profile: RedactionProfile) -> list[Finding]:
         out: list[Finding] = []
         for entity_class, pattern in _PATTERNS.items():
             if entity_class not in profile.classes:
@@ -365,16 +408,19 @@ class Redactor:
                     continue
                 if entity_class is EntityClass.URL and _URL_ALLOW.match(surface):
                     continue
-                out.append(Finding(
-                    entity_class=entity_class,
-                    start=m.start(), end=m.end(),
-                    surface=surface,
-                    canonical=normalise_entity(surface)
-                    if entity_class in (EntityClass.CUSTOMER, EntityClass.PERSON)
-                    else surface.lower(),
-                    confidence=1.0,
-                    detector="pattern",
-                ))
+                out.append(
+                    Finding(
+                        entity_class=entity_class,
+                        start=m.start(),
+                        end=m.end(),
+                        surface=surface,
+                        canonical=normalise_entity(surface)
+                        if entity_class in (EntityClass.CUSTOMER, EntityClass.PERSON)
+                        else surface.lower(),
+                        confidence=1.0,
+                        detector="pattern",
+                    )
+                )
         return out
 
     @staticmethod
@@ -404,7 +450,10 @@ class Redactor:
         self,
         text: str,
         profile: RedactionProfile = STRICT,
-        document_id: str | None = None,
+        # Accepted so callers can pass audit context without a second call
+        # path; not yet threaded into RedactionResult. Wiring it is a change
+        # to the quarantine record, not a lint fix.
+        document_id: str | None = None,  # noqa: ARG002
     ) -> RedactionResult:
         if profile.name == "off" and not profile.classes:
             return RedactionResult(text=text)
@@ -415,14 +464,17 @@ class Redactor:
 
             if profile.use_ml_detection and self._ml_detect is not None:
                 wanted = profile.classes & {
-                    EntityClass.CUSTOMER, EntityClass.PERSON, EntityClass.ADDRESS
+                    EntityClass.CUSTOMER,
+                    EntityClass.PERSON,
+                    EntityClass.ADDRESS,
                 }
                 if wanted:
                     findings += list(self._ml_detect(text, wanted))
         except Exception as exc:  # noqa: BLE001 -- fail closed on any detector error
             if profile.fail_closed:
                 return RedactionResult(
-                    text="", quarantined=True,
+                    text="",
+                    quarantined=True,
                     quarantine_reason=f"detector error: {type(exc).__name__}: {exc}",
                 )
             raise
@@ -436,7 +488,9 @@ class Redactor:
         if weak and profile.fail_closed:
             classes = sorted({f.entity_class.value for f in weak})
             return RedactionResult(
-                text="", findings=findings, quarantined=True,
+                text="",
+                findings=findings,
+                quarantined=True,
                 quarantine_reason=(
                     f"{len(weak)} finding(s) below confidence floor "
                     f"{profile.confidence_floor} in class(es) {', '.join(classes)}"
@@ -449,12 +503,13 @@ class Redactor:
         for f in sorted(findings, key=lambda f: f.start, reverse=True):
             token = self.token_for(f.canonical, f.entity_class)
             token_map[token] = f.canonical
-            buf = buf[:f.start] + token + buf[f.end:]
+            buf = buf[: f.start] + token + buf[f.end :]
 
         result = RedactionResult(text=buf, findings=findings, token_map=token_map)
 
         borderline = [
-            f for f in findings
+            f
+            for f in findings
             if profile.confidence_floor <= f.confidence < profile.review_threshold
         ]
         if borderline:
@@ -467,9 +522,7 @@ class Redactor:
 
     # -- verification -------------------------------------------------------
 
-    def verify(
-        self, sanitised: str, known_surfaces: Sequence[str]
-    ) -> list[str]:
+    def verify(self, sanitised: str, known_surfaces: Sequence[str]) -> list[str]:
         """Second-pass assertion that no known surface survived.
 
         Cheap, and it is the check worth running: it is the thing you show a

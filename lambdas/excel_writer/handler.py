@@ -1,4 +1,5 @@
 """Lambda handler: read source workbook from S3, write annotated copy."""
+
 from __future__ import annotations
 
 import os
@@ -9,8 +10,8 @@ from typing import Any
 
 import boto3
 from boto3.dynamodb.conditions import Key
-
 from writer import write_output
+
 from shared.logging_config import bind_job_context, configure_logging
 from shared.models import CellRef, ConfidenceBreakdown, FinalAnswer, Tier
 from shared.provenance import Citation
@@ -85,9 +86,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             citations_detailed=_citations(item, log),
             divergence_findings=list(item.get("divergence_findings", [])),
             divergence_tier_floor=(
-                Tier(item["divergence_tier_floor"])
-                if item.get("divergence_tier_floor")
-                else None
+                Tier(item["divergence_tier_floor"]) if item.get("divergence_tier_floor") else None
             ),
         )
         for item in items

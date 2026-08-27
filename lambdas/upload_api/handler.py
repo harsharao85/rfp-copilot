@@ -12,12 +12,13 @@ IAM scope (least privilege per spec):
   jobs table       — PutItem, UpdateItem, GetItem
   state machine    — states:StartExecution
 """
+
 from __future__ import annotations
 
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -37,21 +38,21 @@ _sfn_client = None
 _ddb_resource = None
 
 
-def _s3():
+def _s3() -> Any:
     global _s3_client
     if _s3_client is None:
         _s3_client = boto3.client("s3", config=Config(signature_version="s3v4"))
     return _s3_client
 
 
-def _sfn():
+def _sfn() -> Any:
     global _sfn_client
     if _sfn_client is None:
         _sfn_client = boto3.client("stepfunctions")
     return _sfn_client
 
 
-def _ddb():
+def _ddb() -> Any:
     global _ddb_resource
     if _ddb_resource is None:
         _ddb_resource = boto3.resource("dynamodb")
@@ -70,6 +71,7 @@ def _resp(status: int, body: Any) -> dict[str, Any]:
 # Route handlers
 # ---------------------------------------------------------------------------
 
+
 def presign(body: dict[str, Any]) -> dict[str, Any]:
     """Generate a pre-signed PUT URL and create the initial job record."""
     filename = body.get("filename", "rfp.xlsx")
@@ -79,7 +81,7 @@ def presign(body: dict[str, Any]) -> dict[str, Any]:
     job_id = f"job-{str(uuid.uuid4())[:8]}"
     key = f"incoming/{job_id}/{safe_name}"
     bucket = os.environ["INCOMING_BUCKET"]
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     upload_url = _s3().generate_presigned_url(
         "put_object",
@@ -87,13 +89,15 @@ def presign(body: dict[str, Any]) -> dict[str, Any]:
         ExpiresIn=300,  # 5 minutes
     )
 
-    _ddb().Table(os.environ["JOBS_TABLE"]).put_item(Item={
-        "jobId": job_id,
-        "status": "UPLOADING",
-        "key": key,
-        "filename": safe_name,
-        "created_at": now,
-    })
+    _ddb().Table(os.environ["JOBS_TABLE"]).put_item(
+        Item={
+            "jobId": job_id,
+            "status": "UPLOADING",
+            "key": key,
+            "filename": safe_name,
+            "created_at": now,
+        }
+    )
 
     logger.info("upload_api.presigned", job_id=job_id, key=key)
     return _resp(200, {"uploadUrl": upload_url, "bucket": bucket, "key": key, "jobId": job_id})
@@ -146,13 +150,16 @@ def status(job_id: str) -> dict[str, Any]:
     else:
         derived = raw_status  # UPLOADING | PROCESSING
 
-    return _resp(200, {
-        "jobId": job_id,
-        "status": derived,
-        "outputKey": job.get("output_key", ""),
-        "reviewStatus": review_status,
-        "createdAt": job.get("created_at", ""),
-    })
+    return _resp(
+        200,
+        {
+            "jobId": job_id,
+            "status": derived,
+            "outputKey": job.get("output_key", ""),
+            "reviewStatus": review_status,
+            "createdAt": job.get("created_at", ""),
+        },
+    )
 
 
 def download(job_id: str) -> dict[str, Any]:
@@ -178,6 +185,7 @@ def download(job_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
+
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     method = event.get("requestContext", {}).get("http", {}).get("method", "")

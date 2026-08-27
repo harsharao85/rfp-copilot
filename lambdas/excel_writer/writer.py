@@ -16,10 +16,12 @@ Colors match the v0.4 plan §5.8 convention:
   amber  = FFEB9C
   red    = FFC7CE
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from openpyxl import load_workbook
 from openpyxl.comments import Comment
@@ -30,13 +32,13 @@ from shared.models import FinalAnswer, Tier
 TIER_FILLS = {
     Tier.GREEN: PatternFill(start_color="FFC6EFCE", end_color="FFC6EFCE", fill_type="solid"),
     Tier.AMBER: PatternFill(start_color="FFFFEB9C", end_color="FFFFEB9C", fill_type="solid"),
-    Tier.RED:   PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid"),
+    Tier.RED: PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid"),
 }
 
 TIER_COMMENT_PREFIX = {
     Tier.GREEN: "GREEN — auto-draft ready for rep review.",
     Tier.AMBER: "AMBER — SME review required.",
-    Tier.RED:   "RED — SME/compliance/commercial review REQUIRED before submission.",
+    Tier.RED: "RED — SME/compliance/commercial review REQUIRED before submission.",
 }
 
 
@@ -70,7 +72,10 @@ def _comment_body(ans: FinalAnswer) -> str:
     lines.append("")
     lines.append(f"Confidence: {ans.raw_confidence:.2f}")
     b = ans.confidence_breakdown
-    lines.append(f"  H(prior)={b.h:.2f}  R(retrieval)={b.r:.2f}  C(coverage)={b.c:.2f}  F(fresh)={b.f:.2f}  G(guardrail)={b.g:.2f}")
+    lines.append(
+        f"  H(prior)={b.h:.2f}  R(retrieval)={b.r:.2f}  C(coverage)={b.c:.2f}  "
+        f"F(fresh)={b.f:.2f}  G(guardrail)={b.g:.2f}"
+    )
     if ans.hard_rule_triggers:
         lines.append("")
         lines.append("Hard-rule triggers:")
@@ -143,7 +148,7 @@ def write_output(
     return dest_path
 
 
-def _write_summary_sheet(wb: Any, *, answers: list[FinalAnswer], job_id: str) -> None:  # type: ignore[no-untyped-def]
+def _write_summary_sheet(wb: Any, *, answers: list[FinalAnswer], job_id: str) -> None:
     if "RFP Copilot Summary" in wb.sheetnames:
         del wb["RFP Copilot Summary"]
     summary = wb.create_sheet("RFP Copilot Summary")
@@ -151,7 +156,7 @@ def _write_summary_sheet(wb: Any, *, answers: list[FinalAnswer], job_id: str) ->
     summary["A1"] = "RFP Copilot — Answer Summary"
     summary["A1"].font = Font(bold=True, size=16)
     summary["A2"] = f"Job ID: {job_id}"
-    summary["A3"] = f"Generated: {datetime.now(timezone.utc).isoformat()}"
+    summary["A3"] = f"Generated: {datetime.now(UTC).isoformat()}"
     summary["A5"] = "Tier distribution"
     summary["A5"].font = Font(bold=True)
 

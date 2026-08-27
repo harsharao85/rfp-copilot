@@ -14,6 +14,7 @@ Two jobs in one Lambda to avoid an extra Step Functions state:
 
 Returns: {compound, sub_questions, topics, dispatch_plan}
 """
+
 from __future__ import annotations
 
 import json
@@ -21,6 +22,7 @@ import re
 from typing import Any
 
 from dispatch import get_dispatch_plan
+
 from shared.bedrock_client import HAIKU, invoke
 from shared.logging_config import bind_job_context, configure_logging
 
@@ -31,28 +33,49 @@ logger = configure_logging()
 # both stages agree on topic boundaries. Production path: shared config file.
 # ---------------------------------------------------------------------------
 _TOPIC_PATTERNS: dict[str, list[str]] = {
-    "encryption_at_rest":    [r"at.rest", r"aes.?256", r"storage.encr", r"encr.*rest"],
+    "encryption_at_rest": [r"at.rest", r"aes.?256", r"storage.encr", r"encr.*rest"],
     "encryption_in_transit": [r"in.transit", r"\btls\b", r"\bhttps\b", r"transport.encr"],
-    "key_management":        [r"\bbyok\b", r"customer.?managed.?key", r"key.rotation", r"\bkms\b"],
-    "sso":                   [r"\bsso\b", r"\bsaml\b", r"\boidc\b", r"single.sign"],
-    "mfa":                   [r"\bmfa\b", r"multi.?factor", r"two.?factor", r"authenticat"],
-    "scim":                  [r"\bscim\b", r"user.provis", r"auto.*provis"],
-    "dr_bcp":                [r"\bdr\b", r"\brto\b", r"\brpo\b", r"\bbcp\b", r"disaster.recov",
-                              r"uptime", r"\bsla\b", r"availability", r"active.active"],
-    "incident_response":     [r"incident", r"breach", r"security.event", r"notif.*72"],
-    "ssdlc":                 [r"\bsdlc\b", r"secure.dev", r"owasp", r"code.review"],
-    "pentest":               [r"pen.?test", r"penetration", r"vuln.*scan"],
-    "sbom":                  [r"\bsbom\b", r"software.bill", r"dependency"],
-    "dpa":                   [r"\bdpa\b", r"data.process.*agree", r"sub.?processor"],
-    "data_residency":        [r"data.resid", r"data.local", r"region.*store", r"where.*data"],
-    "soc2":                  [r"\bsoc.?2\b", r"\baicpa\b"],
-    "iso27001":              [r"iso.?27001"],
-    "fedramp":               [r"\bfedramp\b", r"federal.risk"],
-    "gdpr":                  [r"\bgdpr\b", r"right.to.eras", r"data.subject"],
-    "pricing":               [r"\bpric(e|ing)\b", r"\bcost\b", r"\bfee\b", r"\bsubscription\b",
-                              r"per.seat", r"per.user", r"\bdiscount\b"],
-    "customer_reference":    [r"customer.*example", r"case.stud", r"client.*reference",
-                              r"reference.customer", r"who.*use"],
+    "key_management": [r"\bbyok\b", r"customer.?managed.?key", r"key.rotation", r"\bkms\b"],
+    "sso": [r"\bsso\b", r"\bsaml\b", r"\boidc\b", r"single.sign"],
+    "mfa": [r"\bmfa\b", r"multi.?factor", r"two.?factor", r"authenticat"],
+    "scim": [r"\bscim\b", r"user.provis", r"auto.*provis"],
+    "dr_bcp": [
+        r"\bdr\b",
+        r"\brto\b",
+        r"\brpo\b",
+        r"\bbcp\b",
+        r"disaster.recov",
+        r"uptime",
+        r"\bsla\b",
+        r"availability",
+        r"active.active",
+    ],
+    "incident_response": [r"incident", r"breach", r"security.event", r"notif.*72"],
+    "ssdlc": [r"\bsdlc\b", r"secure.dev", r"owasp", r"code.review"],
+    "pentest": [r"pen.?test", r"penetration", r"vuln.*scan"],
+    "sbom": [r"\bsbom\b", r"software.bill", r"dependency"],
+    "dpa": [r"\bdpa\b", r"data.process.*agree", r"sub.?processor"],
+    "data_residency": [r"data.resid", r"data.local", r"region.*store", r"where.*data"],
+    "soc2": [r"\bsoc.?2\b", r"\baicpa\b"],
+    "iso27001": [r"iso.?27001"],
+    "fedramp": [r"\bfedramp\b", r"federal.risk"],
+    "gdpr": [r"\bgdpr\b", r"right.to.eras", r"data.subject"],
+    "pricing": [
+        r"\bpric(e|ing)\b",
+        r"\bcost\b",
+        r"\bfee\b",
+        r"\bsubscription\b",
+        r"per.seat",
+        r"per.user",
+        r"\bdiscount\b",
+    ],
+    "customer_reference": [
+        r"customer.*example",
+        r"case.stud",
+        r"client.*reference",
+        r"reference.customer",
+        r"who.*use",
+    ],
 }
 
 DECOMPOSE_SYSTEM = """You decompose compound RFP questions into atomic sub-questions.
@@ -68,7 +91,8 @@ Rules:
 
 Example:
   Q: "Describe your SOC2 scope, audit frequency, and who conducts the audits."
-  A: ["Describe your SOC2 scope.", "Describe your SOC2 audit frequency.", "Who conducts your SOC2 audits?"]
+  A: ["Describe your SOC2 scope.", "Describe your SOC2 audit frequency.",
+      "Who conducts your SOC2 audits?"]
 """
 
 

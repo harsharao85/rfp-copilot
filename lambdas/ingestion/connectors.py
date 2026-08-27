@@ -39,15 +39,17 @@ That is a real tradeoff rather than a blocker:
 
 Pick per source via `ingest_path` in config. Do not let it default silently.
 """
+
 from __future__ import annotations
 
 import abc
 import hashlib
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator
+from typing import Any
 
 __all__ = [
     "SourceDocument",
@@ -72,8 +74,8 @@ class SourceDocument:
 
     document_id: str
     content: str
-    source_type: str           # golden_qa | compliance_cert | product_doc | prior_rfp
-    source_id: str             # which configured source produced this
+    source_type: str  # golden_qa | compliance_cert | product_doc | prior_rfp
+    source_id: str  # which configured source produced this
     mime_type: str = "text/markdown"
     updated_at: str = ""
     topic_ids: list[str] = field(default_factory=list)
@@ -81,9 +83,9 @@ class SourceDocument:
     # carried in a structured field). Seeded into the dictionary pass so we do
     # not rely on detection for things the source told us outright.
     known_sensitive: list[str] = field(default_factory=list)
-    extra_metadata: dict = field(default_factory=dict)
+    extra_metadata: dict[str, Any] = field(default_factory=dict)
 
-    def sidecar(self) -> dict:
+    def sidecar(self) -> dict[str, Any]:
         """Bedrock KB sidecar. Keys stay well under the S3 Vectors 2 KB
         filterable-metadata budget; the two large Bedrock-managed keys are
         marked non-filterable in the KB stack."""
@@ -91,7 +93,7 @@ class SourceDocument:
             "document_id": self.document_id,
             "source_type": self.source_type,
             "source_id": self.source_id,
-            "updated_at": self.updated_at or datetime.now(timezone.utc).isoformat(),
+            "updated_at": self.updated_at or datetime.now(UTC).isoformat(),
             "topic_ids": self.topic_ids,
             "redacted": True,
         }
@@ -105,7 +107,7 @@ class SourceConnector(abc.ABC):
     #: registry key used in config
     type_name: str = ""
 
-    def __init__(self, source_id: str, config: dict) -> None:
+    def __init__(self, source_id: str, config: dict[str, Any]) -> None:
         self.source_id = source_id
         self.config = config
         self.source_type: str = config.get("source_type", "product_doc")
@@ -326,7 +328,7 @@ REGISTRY: dict[str, type[SourceConnector]] = {
 }
 
 
-def build_connector(source_id: str, config: dict) -> SourceConnector:
+def build_connector(source_id: str, config: dict[str, Any]) -> SourceConnector:
     type_name = config.get("type")
     if type_name not in REGISTRY:
         raise ValueError(

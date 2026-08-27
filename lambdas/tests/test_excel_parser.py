@@ -1,4 +1,5 @@
 """Parser tests using the generated synthetic RFP as the fixture."""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -9,6 +9,7 @@ Assertions:
  3. Empty retrievalResults returns [] (not raises).
  4. A ClientError returns [] and logs retriever.kb_error.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -65,12 +66,13 @@ def _kb_hit(
 # Assertion 1 — filter routing per source
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "source,expected_source_type",
     [
         ("compliance_store", "compliance_cert"),
-        ("product_docs",     "product_doc"),
-        ("prior_rfps",       "prior_rfp"),
+        ("product_docs", "product_doc"),
+        ("prior_rfps", "prior_rfp"),
     ],
 )
 def test_retrieve_sends_correct_source_type_filter(
@@ -95,17 +97,22 @@ def test_retrieve_sends_correct_source_type_filter(
 # Assertion 2 — updated_at / approved_at pass through into metadata.
 # ---------------------------------------------------------------------------
 
-def test_updated_at_flows_through_to_passage_metadata(mock_client: MagicMock) -> None:
-    mock_client.retrieve.return_value = _kb_response([
-        _kb_hit(
-            text="SOC 2 audit covers Security, Availability, Confidentiality.",
-            uri="s3://bucket/compliance/soc2_cert_2025.pdf",
-            document_id="soc2_cert_2025",
-            updated_at="2025-10-01",
-        ),
-    ])
 
-    passages = _knowledge_base_retrieve("SOC 2 scope", source="compliance_store", source_system="compliance")
+def test_updated_at_flows_through_to_passage_metadata(mock_client: MagicMock) -> None:
+    mock_client.retrieve.return_value = _kb_response(
+        [
+            _kb_hit(
+                text="SOC 2 audit covers Security, Availability, Confidentiality.",
+                uri="s3://bucket/compliance/soc2_cert_2025.pdf",
+                document_id="soc2_cert_2025",
+                updated_at="2025-10-01",
+            ),
+        ]
+    )
+
+    passages = _knowledge_base_retrieve(
+        "SOC 2 scope", source="compliance_store", source_system="compliance"
+    )
 
     assert len(passages) == 1
     assert passages[0].metadata["updated_at"] == "2025-10-01"
@@ -114,17 +121,21 @@ def test_updated_at_flows_through_to_passage_metadata(mock_client: MagicMock) ->
 
 
 def test_approved_at_flows_through_to_passage_metadata(mock_client: MagicMock) -> None:
-    mock_client.retrieve.return_value = _kb_response([
-        _kb_hit(
-            text="Older approved answer.",
-            uri="s3://bucket/sme-approved/lfb-0001.md",
-            document_id="lfb-0001",
-            approved_at="2025-07-01",
-        ),
-    ])
+    mock_client.retrieve.return_value = _kb_response(
+        [
+            _kb_hit(
+                text="Older approved answer.",
+                uri="s3://bucket/sme-approved/lfb-0001.md",
+                document_id="lfb-0001",
+                approved_at="2025-07-01",
+            ),
+        ]
+    )
 
     passages = _knowledge_base_retrieve(
-        "SOC 2", source="sme_approved_answers", source_system="sme_approved",
+        "SOC 2",
+        source="sme_approved_answers",
+        source_system="sme_approved",
     )
 
     assert len(passages) == 1
@@ -136,10 +147,13 @@ def test_approved_at_flows_through_to_passage_metadata(mock_client: MagicMock) -
 # Assertion 3 — empty results
 # ---------------------------------------------------------------------------
 
+
 def test_empty_retrieval_results_returns_empty_list(mock_client: MagicMock) -> None:
     mock_client.retrieve.return_value = _kb_response([])
 
-    passages = _knowledge_base_retrieve("no matches", source="product_docs", source_system="whitepaper")
+    passages = _knowledge_base_retrieve(
+        "no matches", source="product_docs", source_system="whitepaper"
+    )
 
     assert passages == []
 
@@ -147,6 +161,7 @@ def test_empty_retrieval_results_returns_empty_list(mock_client: MagicMock) -> N
 # ---------------------------------------------------------------------------
 # Assertion 4 — ClientError yields [] and logs retriever.kb_error
 # ---------------------------------------------------------------------------
+
 
 def test_client_error_returns_empty_and_logs(
     mock_client: MagicMock,
@@ -159,7 +174,9 @@ def test_client_error_returns_empty_and_logs(
         operation_name="Retrieve",
     )
 
-    passages = _knowledge_base_retrieve("whatever", source="compliance_store", source_system="compliance")
+    passages = _knowledge_base_retrieve(
+        "whatever", source="compliance_store", source_system="compliance"
+    )
 
     assert passages == []
     captured = capsys.readouterr()

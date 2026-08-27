@@ -24,6 +24,7 @@ behavior: if a question matches multiple topics across classes, the most-
 restrictive class wins (gated > auth_compliance > auth_product > unclassified)
 and primary/secondary/tertiary source lists are unioned.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -54,7 +55,7 @@ CLASS_CONFIGS: dict[str, _ClassConfig] = {
         primary=("product_docs",),
         secondary=("prior_rfps",),
         extra_primary_by_topic={
-            "dr_bcp":         ("compliance_store",),
+            "dr_bcp": ("compliance_store",),
             "data_residency": ("compliance_store",),
         },
         extra_tertiary_by_topic={
@@ -77,26 +78,26 @@ CLASS_CONFIGS: dict[str, _ClassConfig] = {
 # Topic-to-class membership. One mapping, easy to audit and extend.
 TOPIC_CLASS: dict[str, str] = {
     # auth_compliance
-    "soc2":              "auth_compliance",
-    "iso27001":          "auth_compliance",
-    "fedramp":           "auth_compliance",
-    "gdpr":              "auth_compliance",
-    "dpa":               "auth_compliance",
+    "soc2": "auth_compliance",
+    "iso27001": "auth_compliance",
+    "fedramp": "auth_compliance",
+    "gdpr": "auth_compliance",
+    "dpa": "auth_compliance",
     "incident_response": "auth_compliance",
-    "pentest":           "auth_compliance",
+    "pentest": "auth_compliance",
     # auth_product
-    "encryption_at_rest":    "auth_product",
+    "encryption_at_rest": "auth_product",
     "encryption_in_transit": "auth_product",
-    "key_management":        "auth_product",
-    "sso":                   "auth_product",
-    "mfa":                   "auth_product",
-    "scim":                  "auth_product",
-    "dr_bcp":                "auth_product",
-    "ssdlc":                 "auth_product",
-    "sbom":                  "auth_product",
-    "data_residency":        "auth_product",
+    "key_management": "auth_product",
+    "sso": "auth_product",
+    "mfa": "auth_product",
+    "scim": "auth_product",
+    "dr_bcp": "auth_product",
+    "ssdlc": "auth_product",
+    "sbom": "auth_product",
+    "data_residency": "auth_product",
     # gated
-    "pricing":            "gated",
+    "pricing": "gated",
     "customer_reference": "gated",
 }
 
@@ -136,9 +137,7 @@ def _plan_for_topic(topic: str) -> DispatchPlan:
 
 
 # Back-compat: tests and any downstream code still reference DISPATCH_TABLE.
-DISPATCH_TABLE: dict[str, DispatchPlan] = {
-    topic: _plan_for_topic(topic) for topic in TOPIC_CLASS
-}
+DISPATCH_TABLE: dict[str, DispatchPlan] = {topic: _plan_for_topic(topic) for topic in TOPIC_CLASS}
 
 
 DEFAULT_DISPATCH_PLAN = DispatchPlan(

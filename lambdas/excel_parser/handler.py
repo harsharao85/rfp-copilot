@@ -1,15 +1,16 @@
 """Lambda handler: download the RFP workbook from S3, parse, persist."""
+
 from __future__ import annotations
 
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
-
 from parser import parse_workbook
+
 from shared.logging_config import bind_job_context, configure_logging
 
 logger = configure_logging()
@@ -48,7 +49,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         Key={"jobId": job_id},
         UpdateExpression="SET parsed_at = :t, question_count = :c, sources = :s",
         ExpressionAttributeValues={
-            ":t": datetime.now(timezone.utc).isoformat(),
+            ":t": datetime.now(UTC).isoformat(),
             ":c": len(questions),
             ":s": {"bucket": bucket, "key": key},
         },

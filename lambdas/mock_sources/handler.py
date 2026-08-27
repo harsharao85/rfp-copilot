@@ -17,6 +17,7 @@ when MOCK_SOURCES_API_URL is set. Circuit breaker visibility: when this
 Lambda returns 503 the retriever logs `source_degraded` and the
 corroboration_metadata field carries the flag into the audit trail.
 """
+
 from __future__ import annotations
 
 import json
@@ -119,7 +120,7 @@ def _simulate_behaviour() -> dict[str, Any] | None:
     return None
 
 
-def _response(status: int, body: dict) -> dict[str, Any]:
+def _response(status: int, body: dict[str, Any]) -> dict[str, Any]:
     return {
         "statusCode": status,
         "headers": {"Content-Type": "application/json"},
@@ -148,7 +149,7 @@ def _handle_seismic_content(query: str, limit: int) -> dict[str, Any]:
 
 def _handle_gong_calls(query: str, limit: int) -> dict[str, Any]:
     scored = sorted(
-        ((c, _keyword_score(c["title"] + " " + c["excerpt"], query)) for c in _GONG_CALLS),
+        ((c, _keyword_score(f"{c['title']} {c['excerpt']}", query)) for c in _GONG_CALLS),
         key=lambda x: -x[1],
     )
     results = [

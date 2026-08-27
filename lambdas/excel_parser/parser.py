@@ -23,6 +23,7 @@ The classifier step is deferred to a separate Lambda in prod to keep
 the parser deterministic (no LLM) for ~80% of well-formed RFPs. Only
 if heuristics flag low confidence do we call Haiku.
 """
+
 from __future__ import annotations
 
 import re
@@ -31,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from openpyxl import load_workbook
-from openpyxl.cell.cell import Cell
+from openpyxl.cell.cell import Cell, MergedCell
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -40,11 +41,11 @@ from shared.models import CellRef, Question
 # Patterns used for heuristic detection
 QUESTION_NUMBER_RE = re.compile(
     r"^\s*("
-    r"Q\d+|"                  # Q1, Q12
-    r"\d+[\.\)]|"             # 1., 1)
-    r"\d+\.\d+[\.\)]?|"       # 1.1, 1.2.3
-    r"[A-Z]{2,6}-\d+|"        # SEC-001, ACC-12
-    r"[A-Z]\.\d+|"            # A.1
+    r"Q\d+|"  # Q1, Q12
+    r"\d+[\.\)]|"  # 1., 1)
+    r"\d+\.\d+[\.\)]?|"  # 1.1, 1.2.3
+    r"[A-Z]{2,6}-\d+|"  # SEC-001, ACC-12
+    r"[A-Z]\.\d+|"  # A.1
     r"Question\s+\d+"
     r")\s",
     re.IGNORECASE,
@@ -53,10 +54,10 @@ SECTION_HEADER_RE = re.compile(
     r"^\s*("
     r"Section\s+\d+|"
     r"Part\s+[A-Z]|"
-    r"[A-Z\s]{4,}$|"            # ALL CAPS short line
-    r"\d+\.\s+[A-Z][a-z]+|"     # "1. Security"
-    r"[A-Z]\.\s+[A-Z][a-z]+|"   # "A. Corporate"
-    r"[A-Z]\d+\.\s+[A-Z][a-z]+" # "A1. Corporate"
+    r"[A-Z\s]{4,}$|"  # ALL CAPS short line
+    r"\d+\.\s+[A-Z][a-z]+|"  # "1. Security"
+    r"[A-Z]\.\s+[A-Z][a-z]+|"  # "A. Corporate"
+    r"[A-Z]\d+\.\s+[A-Z][a-z]+"  # "A1. Corporate"
     r")",
 )
 # Keep this tight. Anything matched here is CLASSIFIED AS NON-QUESTION,
@@ -65,14 +66,21 @@ SECTION_HEADER_RE = re.compile(
 # avoid swallowing questions that merely *contain* these phrases
 # (e.g., "How do you respond to insider threats?").
 INSTRUCTION_KEYWORDS = (
-    "please respond", "please provide", "please answer", "please complete",
-    "instructions:", "note:", "guidance:", "please fill in",
+    "please respond",
+    "please provide",
+    "please answer",
+    "please complete",
+    "instructions:",
+    "note:",
+    "guidance:",
+    "please fill in",
 )
 
 
 @dataclass
 class Candidate:
     """A cell we think might be a question."""
+
     sheet: str
     row: int
     col: int
@@ -82,7 +90,7 @@ class Candidate:
     length: int
 
 
-def _cell_is_blank(c: Cell) -> bool:
+def _cell_is_blank(c: Cell | MergedCell) -> bool:
     return c.value is None or (isinstance(c.value, str) and c.value.strip() == "")
 
 
@@ -97,9 +105,7 @@ def _looks_like_section_header(text: str) -> bool:
     if SECTION_HEADER_RE.match(text):
         return True
     # All-caps multi-word short lines with no trailing question mark
-    if text == text.upper() and len(words) <= 6 and "?" not in text:
-        return True
-    return False
+    return text == text.upper() and len(words) <= 6 and "?" not in text
 
 
 def _looks_like_instruction(text: str) -> bool:
@@ -128,8 +134,7 @@ def _merged_cell_anchor(ws: Worksheet, row: int, col: int) -> tuple[int, int]:
     """If (row, col) is inside a merged range, return the anchor coordinate.
     Otherwise return (row, col) unchanged."""
     for merged in ws.merged_cells.ranges:
-        if (merged.min_row <= row <= merged.max_row
-                and merged.min_col <= col <= merged.max_col):
+        if merged.min_row <= row <= merged.max_row and merged.min_col <= col <= merged.max_col:
             return merged.min_row, merged.min_col
     return row, col
 

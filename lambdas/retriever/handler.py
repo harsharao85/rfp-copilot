@@ -23,17 +23,18 @@ weekly scheduled re-ingestion catches pipeline stalls.
 Customer-reference gating (hard rule 4) reads reference_customers_matched
 from this envelope. Force-tier (pricing) is forwarded via corroboration_metadata.
 """
+
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
-from datetime import date
-from typing import Any
-
-import functools
 import urllib.error
+import urllib.parse
 import urllib.request
+from datetime import date, datetime
+from typing import Any
 
 import boto3
 from boto3.dynamodb.conditions import Attr
@@ -49,13 +50,14 @@ logger = configure_logging()
 # (important for unit tests). The cached client is reused across Lambda invocations
 # within the same execution context.
 @functools.lru_cache(maxsize=1)
-def _bedrock_agent_runtime():
+def _bedrock_agent_runtime() -> Any:
     return boto3.client("bedrock-agent-runtime")
 
 
 @functools.lru_cache(maxsize=1)
-def _ddb():
+def _ddb() -> Any:
     return boto3.resource("dynamodb")
+
 
 # ---------------------------------------------------------------------------
 # Source routing — maps dispatch source names to Bedrock KB source_type
@@ -65,16 +67,16 @@ def _ddb():
 # H signal with real cosine scores — see _kb_prior_matches below.
 # ---------------------------------------------------------------------------
 _SOURCE_TYPE_FILTER: dict[str, str] = {
-    "compliance_store":     "compliance_cert",
-    "prior_rfps":           "prior_rfp",
-    "product_docs":         "product_doc",
+    "compliance_store": "compliance_cert",
+    "prior_rfps": "prior_rfp",
+    "product_docs": "product_doc",
     "sme_approved_answers": "sme_approved_answer",
 }
 
 _SOURCE_TO_SYSTEM: dict[str, str] = {
-    "compliance_store":     "compliance",
-    "prior_rfps":           "historical_rfp",
-    "product_docs":         "whitepaper",
+    "compliance_store": "compliance",
+    "prior_rfps": "historical_rfp",
+    "product_docs": "whitepaper",
     "sme_approved_answers": "sme_approved",
 }
 
@@ -90,24 +92,33 @@ _MOCK_SOURCE_PATHS = {
 # Used when the event arrives without classification (e.g. direct Lambda invoke).
 # ---------------------------------------------------------------------------
 _TOPIC_PATTERNS: dict[str, list[str]] = {
-    "encryption_at_rest":    [r"at.rest", r"aes.?256", r"storage.encr", r"encr.*rest"],
+    "encryption_at_rest": [r"at.rest", r"aes.?256", r"storage.encr", r"encr.*rest"],
     "encryption_in_transit": [r"in.transit", r"\btls\b", r"\bhttps\b", r"transport.encr"],
-    "key_management":        [r"\bbyok\b", r"customer.?managed.?key", r"key.rotation", r"\bkms\b"],
-    "sso":                   [r"\bsso\b", r"\bsaml\b", r"\boidc\b", r"single.sign"],
-    "mfa":                   [r"\bmfa\b", r"multi.?factor", r"two.?factor", r"authenticat"],
-    "scim":                  [r"\bscim\b", r"user.provis", r"auto.*provis"],
-    "dr_bcp":                [r"\bdr\b", r"\brto\b", r"\brpo\b", r"\bbcp\b", r"disaster.recov",
-                              r"uptime", r"\bsla\b", r"availability", r"active.active"],
-    "incident_response":     [r"incident", r"breach", r"security.event", r"notif.*72"],
-    "ssdlc":                 [r"\bsdlc\b", r"secure.dev", r"owasp", r"code.review"],
-    "pentest":               [r"pen.?test", r"penetration", r"vuln.*scan"],
-    "sbom":                  [r"\bsbom\b", r"software.bill", r"dependency"],
-    "dpa":                   [r"\bdpa\b", r"data.process.*agree", r"sub.?processor"],
-    "data_residency":        [r"data.resid", r"data.local", r"region.*store", r"where.*data"],
-    "soc2":                  [r"\bsoc.?2\b", r"\baicpa\b"],
-    "iso27001":              [r"iso.?27001"],
-    "fedramp":               [r"\bfedramp\b", r"federal.risk"],
-    "gdpr":                  [r"\bgdpr\b", r"right.to.eras", r"data.subject"],
+    "key_management": [r"\bbyok\b", r"customer.?managed.?key", r"key.rotation", r"\bkms\b"],
+    "sso": [r"\bsso\b", r"\bsaml\b", r"\boidc\b", r"single.sign"],
+    "mfa": [r"\bmfa\b", r"multi.?factor", r"two.?factor", r"authenticat"],
+    "scim": [r"\bscim\b", r"user.provis", r"auto.*provis"],
+    "dr_bcp": [
+        r"\bdr\b",
+        r"\brto\b",
+        r"\brpo\b",
+        r"\bbcp\b",
+        r"disaster.recov",
+        r"uptime",
+        r"\bsla\b",
+        r"availability",
+        r"active.active",
+    ],
+    "incident_response": [r"incident", r"breach", r"security.event", r"notif.*72"],
+    "ssdlc": [r"\bsdlc\b", r"secure.dev", r"owasp", r"code.review"],
+    "pentest": [r"pen.?test", r"penetration", r"vuln.*scan"],
+    "sbom": [r"\bsbom\b", r"software.bill", r"dependency"],
+    "dpa": [r"\bdpa\b", r"data.process.*agree", r"sub.?processor"],
+    "data_residency": [r"data.resid", r"data.local", r"region.*store", r"where.*data"],
+    "soc2": [r"\bsoc.?2\b", r"\baicpa\b"],
+    "iso27001": [r"iso.?27001"],
+    "fedramp": [r"\bfedramp\b", r"federal.risk"],
+    "gdpr": [r"\bgdpr\b", r"right.to.eras", r"data.subject"],
 }
 
 
@@ -125,10 +136,13 @@ def _extract_topics(text: str) -> list[str]:
 # filtered by source_type metadata to isolate compliance / product / priors.
 # ---------------------------------------------------------------------------
 
+
 def _knowledge_base_retrieve(
     text: str,
-    source: str,           # dispatch source name: compliance_store | product_docs | prior_rfps | sme_approved_answers
-    source_system: str,    # RetrievedPassage.source_system literal
+    # dispatch source name: compliance_store | product_docs | prior_rfps |
+    # sme_approved_answers
+    source: str,
+    source_system: str,  # RetrievedPassage.source_system literal
     top_k: int = 5,
 ) -> list[RetrievedPassage]:
     """Call bedrock-agent-runtime:Retrieve with a source_type filter.
@@ -161,15 +175,17 @@ def _knowledge_base_retrieve(
 
         doc_id = md.get("document_id") or (uri.rsplit("/", 1)[-1] if uri else "unknown")
         meta = _sidecar_metadata(md, uri)
-        passages.append(RetrievedPassage(
-            source_system=source_system,  # type: ignore[arg-type]
-            document_id=doc_id,
-            excerpt=(r.get("content", {}).get("text") or "")[:2000],
-            score=min(max(float(r.get("score", 0.0)), 0.0), 1.0),
-            uri=uri,
-            metadata=meta,
-            provenance=_hydrate_provenance(md, document_id=doc_id, source=source),
-        ))
+        passages.append(
+            RetrievedPassage(
+                source_system=source_system,  # type: ignore[arg-type]
+                document_id=doc_id,
+                excerpt=(r.get("content", {}).get("text") or "")[:2000],
+                score=min(max(float(r.get("score", 0.0)), 0.0), 1.0),
+                uri=uri,
+                metadata=meta,
+                provenance=_hydrate_provenance(md, document_id=doc_id, source=source),
+            )
+        )
     return passages
 
 
@@ -203,9 +219,7 @@ def _sidecar_metadata(md: dict[str, Any], uri: str | None) -> dict[str, Any]:
     return meta
 
 
-def _hydrate_provenance(
-    md: dict[str, Any], *, document_id: str, source: str
-) -> Provenance | None:
+def _hydrate_provenance(md: dict[str, Any], *, document_id: str, source: str) -> Provenance | None:
     """Build a Provenance from sidecar attributes, or None if it will not build.
 
     Fail-soft on purpose. A sidecar written before the provenance schema
@@ -246,13 +260,17 @@ def _mock_api_passages(source: str, text: str, top_k: int = 5) -> list[Retrieved
     if not path:
         return []
 
-    url = f"{base_url}{path}?query={urllib.request.quote(text)}&limit={top_k}"
-    req = urllib.request.Request(
+    # S310 below: the scheme comes from MOCK_SOURCES_API_URL, a service-owned
+    # environment variable set by the CDK stack, not from anything a caller or
+    # a questionnaire can influence. Only the query string is caller-derived,
+    # and it is percent-encoded.
+    url = f"{base_url}{path}?query={urllib.parse.quote(text)}&limit={top_k}"
+    req = urllib.request.Request(  # noqa: S310
         url,
         headers={"Authorization": "Bearer demo-key"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:  # noqa: S310
             if resp.status != 200:
                 logger.warning("retriever.source_degraded", source=source, status=resp.status)
                 return []
@@ -294,7 +312,6 @@ def _retrieve_for_sources(
         if source == "customer_refs_db":
             continue  # handled via _dynamo_reference_customers
         if source in _MOCK_SOURCE_PATHS:
-            before = len(passages)
             results = _mock_api_passages(source, text, top_k)
             passages.extend(results)
             # Degraded = attempted the call but API returned no results due to error.
@@ -307,13 +324,16 @@ def _retrieve_for_sources(
             logger.warning("retriever.unknown_source", source=source)
             continue
         system = _SOURCE_TO_SYSTEM.get(source, "other")
-        passages.extend(_knowledge_base_retrieve(text, source=source, source_system=system, top_k=top_k))
+        passages.extend(
+            _knowledge_base_retrieve(text, source=source, source_system=system, top_k=top_k)
+        )
     return passages, degraded
 
 
 # ---------------------------------------------------------------------------
 # H-signal retrieval — SME-approved Q&A; skipped for auth_* classes.
 # ---------------------------------------------------------------------------
+
 
 def _kb_prior_matches(text: str, top_k: int = 3) -> list[PriorAnswerMatch]:
     """Query the KB for SME-approved Q&A with real semantic similarity.
@@ -340,18 +360,22 @@ def _kb_prior_matches(text: str, top_k: int = 3) -> list[PriorAnswerMatch]:
         expires_on = str(md.get("expires_on") or "")
         if expires_on and expires_on < today:
             continue  # hard-expire at the retrieval boundary
-        matches.append(PriorAnswerMatch(
-            answer_id=p.document_id,
-            # Sidecar carries the original question text; fall back to the
-            # chunk excerpt if a chunked sidecar has lost it (shouldn't happen
-            # at our corpus size but defensive).
-            question_text=str(md.get("question_text", "")) or p.excerpt[:200],
-            answer_text=p.excerpt,
-            similarity=p.score,  # real cosine from KB, not fake 0.82
-            approved_by=str(md.get("approved_by", "unknown")),
-            approved_at=str(md.get("approved_at", "2025-01-01T00:00:00Z")),
-            expires_on=None,  # boundary-filtered above; model doesn't need to re-check
-        ))
+        matches.append(
+            PriorAnswerMatch(
+                answer_id=p.document_id,
+                # Sidecar carries the original question text; fall back to the
+                # chunk excerpt if a chunked sidecar has lost it (shouldn't happen
+                # at our corpus size but defensive).
+                question_text=str(md.get("question_text", "")) or p.excerpt[:200],
+                answer_text=p.excerpt,
+                similarity=p.score,  # real cosine from KB, not fake 0.82
+                approved_by=str(md.get("approved_by", "unknown")),
+                approved_at=datetime.fromisoformat(
+                    str(md.get("approved_at", "2025-01-01T00:00:00+00:00")).replace("Z", "+00:00")
+                ),
+                expires_on=None,  # boundary-filtered above; model doesn't need to re-check
+            )
+        )
     return matches
 
 
@@ -382,6 +406,7 @@ def _dynamo_reference_customers(industry: str | None) -> list[str]:
 # Handler
 # ---------------------------------------------------------------------------
 
+
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     job_id = event["jobId"]
     question_id = event["questionId"]
@@ -392,8 +417,12 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     use_stub = os.environ.get("USE_RETRIEVAL_STUB", "false").lower() == "true"
     if use_stub:
         log.warning("retriever.using_stub")
-        return Retrieval(passages=[], prior_matches=[], reference_customers_matched=[],
-                         topic_class="unclassified").model_dump(mode="json")
+        return Retrieval(
+            passages=[],
+            prior_matches=[],
+            reference_customers_matched=[],
+            topic_class="unclassified",
+        ).model_dump(mode="json")
 
     # Parse dispatch plan from classifier output, or fall back to topic extraction.
     classification = event.get("classification", {})
@@ -404,7 +433,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     else:
         # Direct invocation without classifier — extract topics inline.
         topics = _extract_topics(text)
-        from dispatch import get_dispatch_plan  # noqa: PLC0415 — local import avoids circular on stub path
+        from dispatch import (
+            get_dispatch_plan,  # noqa: PLC0415 — local import avoids circular on stub path
+        )
+
         dispatch_plan = get_dispatch_plan(topics)
 
     topic_class = dispatch_plan.topic_class
@@ -439,10 +471,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
     # H signal: skip for authoritative topics (no SME-override decay risk on
     # primary-backed classes). Only query for unclassified.
-    if topic_class == "unclassified":
-        prior_matches = _kb_prior_matches(text)
-    else:
-        prior_matches = []
+    prior_matches = _kb_prior_matches(text) if topic_class == "unclassified" else []
 
     refs = _dynamo_reference_customers(industry)
 

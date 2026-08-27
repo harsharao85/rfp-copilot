@@ -1,4 +1,5 @@
 """Lambda handler for hard-rule enforcement."""
+
 from __future__ import annotations
 
 import os
@@ -6,8 +7,8 @@ from decimal import Decimal
 from typing import Any
 
 import boto3
-
 from rules import RULES_VERSION, apply_rules
+
 from shared.logging_config import bind_job_context, configure_logging
 from shared.models import Tier
 
@@ -53,18 +54,21 @@ def _detailed_citations(event: dict[str, Any]) -> list[dict[str, Any]]:
         passage = by_doc.get(doc_id)
         if passage is None:
             continue
-        detailed.append({
-            "provenance": passage["provenance"],
-            "excerpt": (passage.get("excerpt") or "")[:_MAX_EXCERPT_CHARS],
-            "relevance": float(passage.get("score", 0.0)),
-        })
+        detailed.append(
+            {
+                "provenance": passage["provenance"],
+                "excerpt": (passage.get("excerpt") or "")[:_MAX_EXCERPT_CHARS],
+                "relevance": float(passage.get("score", 0.0)),
+            }
+        )
         if len(detailed) >= _MAX_CITATIONS:
             break
     return detailed
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
-    """Event shape: {jobId, questionId, generation, score, retrieval, answer_cell, confidence_cell}."""
+    """Event shape: {jobId, questionId, generation, score, retrieval,
+    answer_cell, confidence_cell}."""
     job_id = event["jobId"]
     question_id = event["questionId"]
     log = bind_job_context(logger, job_id=job_id, question_id=question_id)
@@ -73,13 +77,13 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     answer_text: str = event["generation"]["answer_text"]
     invoked_customers: list[str] = event["generation"].get("invoked_customers", [])
     approved_customers: list[str] = event["retrieval"].get("reference_customers_matched", [])
-    corroboration_meta: dict = event["retrieval"].get("corroboration_metadata", {})
+    corroboration_meta: dict[str, Any] = event["retrieval"].get("corroboration_metadata", {})
 
     # Divergence report from the retrospective detector, when it ran. Shape:
     # {"tier_floor": "red"|"amber"|None, "findings": [rendered line, ...],
     #  "findings_by_kind": {kind: count}}. Absent until the detector state is
     # added to the state machine, which is why every read is defensive.
-    divergence: dict = event.get("divergence") or {}
+    divergence: dict[str, Any] = event.get("divergence") or {}
     raw_floor = divergence.get("tier_floor")
     divergence_floor = Tier(raw_floor) if raw_floor else None
     divergence_findings: list[str] = list(divergence.get("findings", []))
@@ -143,7 +147,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         displayed_confidence = {
             Tier.GREEN: 0.95,
             Tier.AMBER: 0.65,
-            Tier.RED:   0.20,
+            Tier.RED: 0.20,
         }[result.final_tier]
 
     ddb.Table(os.environ["QUESTIONS_TABLE"]).update_item(
@@ -162,7 +166,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             ":ci": event["generation"].get("citations", []),
             ":rc": Decimal(str(displayed_confidence)),
             ":ti": result.final_tier.value,
-            ":cb": {k: Decimal(str(v)) for k, v in breakdown.items() if isinstance(v, (int, float))},
+            ":cb": {
+                k: Decimal(str(v)) for k, v in breakdown.items() if isinstance(v, (int, float))
+            },
             ":hr": result.triggers,
             ":rr": result.reviewer_required,
             ":tids": topic_ids,

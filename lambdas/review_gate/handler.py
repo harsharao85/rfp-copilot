@@ -4,10 +4,11 @@ Stores the task token on the job record so the review API can
 later call SendTaskSuccess to resume the execution. Returns
 immediately (the return value is ignored by SF in this pattern).
 """
+
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -36,7 +37,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             ":s": "PENDING",
             ":ok": event.get("outputKey", ""),
             ":ob": event.get("outputBucket", ""),
-            ":ra": datetime.now(timezone.utc).isoformat(),
+            ":ra": datetime.now(UTC).isoformat(),
         },
     )
     log.info("review_gate.stored_token", output_key=event.get("outputKey"))

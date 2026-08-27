@@ -1,12 +1,13 @@
 """Structured logging with structlog. All log entries are JSON so they
 land cleanly in CloudWatch Logs Insights + stream to QuickSight.
 """
+
 from __future__ import annotations
 
 import logging
 import os
 import sys
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -31,7 +32,9 @@ def configure_logging() -> structlog.stdlib.BoundLogger:
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
-    return structlog.get_logger()
+    # structlog.get_logger() is untyped; the wrapper_class configured above
+    # is what makes the returned logger a BoundLogger.
+    return cast("structlog.stdlib.BoundLogger", structlog.get_logger())
 
 
 def bind_job_context(logger: Any, job_id: str, question_id: str | None = None) -> Any:

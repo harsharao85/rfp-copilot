@@ -6,12 +6,13 @@ Routes (HTTP API Gateway proxy format):
   POST /reviews/{jobId}/approve  — body: {answers:[{questionId,answer_text}]}
   POST /reviews/{jobId}/reject   — body: {reason: str}
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -51,6 +52,7 @@ def _d2f(obj: Any) -> Any:
 
 # ---- route handlers --------------------------------------------------------
 
+
 def list_reviews() -> dict[str, Any]:
     table = ddb.Table(os.environ["JOBS_TABLE"])
     resp = table.scan(FilterExpression=Attr("review_status").eq("PENDING"))
@@ -83,38 +85,49 @@ def get_review(job_id: str) -> dict[str, Any]:
         kwargs["ExclusiveStartKey"] = r["LastEvaluatedKey"]
 
     reviewable = [
-        _d2f({
-            "questionId": q["questionId"],
-            "text": q.get("text", ""),
-            "section": q.get("section", ""),
-            "answer_text": q.get("answer_text", ""),
-            "tier": q.get("tier", "red"),
-            "raw_confidence": q.get("raw_confidence", 0),
-            "hard_rule_triggers": q.get("hard_rule_triggers", []),
-            "reviewer_required": q.get("reviewer_required", True),
-            "answer_cell": q.get("answer_cell", {}),
-            "citations": q.get("citations", []),
-            "confidence_breakdown": q.get("confidence_breakdown", {}),
-            "suppressed_prior_count": q.get("suppressed_prior_count", 0),
-            "primary_passage_uris": q.get("primary_passage_uris", []),
-            "topic_ids": q.get("topic_ids", []),
-        })
+        _d2f(
+            {
+                "questionId": q["questionId"],
+                "text": q.get("text", ""),
+                "section": q.get("section", ""),
+                "answer_text": q.get("answer_text", ""),
+                "tier": q.get("tier", "red"),
+                "raw_confidence": q.get("raw_confidence", 0),
+                "hard_rule_triggers": q.get("hard_rule_triggers", []),
+                "reviewer_required": q.get("reviewer_required", True),
+                "answer_cell": q.get("answer_cell", {}),
+                "citations": q.get("citations", []),
+                "confidence_breakdown": q.get("confidence_breakdown", {}),
+                "suppressed_prior_count": q.get("suppressed_prior_count", 0),
+                "primary_passage_uris": q.get("primary_passage_uris", []),
+                "topic_ids": q.get("topic_ids", []),
+            }
+        )
         for q in items
         if q.get("reviewer_required") or q.get("tier") in ("amber", "red")
     ]
     reviewable.sort(key=lambda q: (q["tier"] != "red", q["tier"] != "amber"))
 
-    return _resp(200, {
-        "jobId": job_id,
-        "status": job.get("review_status"),
-        "outputKey": job.get("output_key", ""),
-        "questions": reviewable,
-    })
+    return _resp(
+        200,
+        {
+            "jobId": job_id,
+            "status": job.get("review_status"),
+            "outputKey": job.get("output_key", ""),
+            "questions": reviewable,
+        },
+    )
 
 
 def _qa_markdown(
-    *, doc_id: str, approved_by: str, approved_at: str, topic_ids: list[str],
-    corroborated_by: list[str], question_text: str, answer_text: str,
+    *,
+    doc_id: str,
+    approved_by: str,
+    approved_at: str,
+    topic_ids: list[str],
+    corroborated_by: list[str],
+    question_text: str,
+    answer_text: str,
 ) -> str:
     """Same shape as scripts/generate_corpus_documents.py's _generate_sme_approved."""
     return (
@@ -141,7 +154,7 @@ def _emit_sme_approved_to_kb(
     """
     bucket = os.environ["REFERENCE_CORPUS_BUCKET"]
     approved_at_date = now_iso[:10]  # sidecar uses ISO date for lexicographic compare
-    expires_on = (datetime.now(timezone.utc) + timedelta(days=730)).date().isoformat()
+    expires_on = (datetime.now(UTC) + timedelta(days=730)).date().isoformat()
 
     questions_table = ddb.Table(os.environ["QUESTIONS_TABLE"])
     items: list[Any] = []
@@ -169,27 +182,35 @@ def _emit_sme_approved_to_kb(
         corroborated_by = list(q.get("primary_passage_uris", []))
 
         md_body = _qa_markdown(
-            doc_id=doc_id, approved_by=approved_by, approved_at=approved_at_date,
-            topic_ids=topic_ids, corroborated_by=corroborated_by,
-            question_text=question_text, answer_text=answer_text,
+            doc_id=doc_id,
+            approved_by=approved_by,
+            approved_at=approved_at_date,
+            topic_ids=topic_ids,
+            corroborated_by=corroborated_by,
+            question_text=question_text,
+            answer_text=answer_text,
         )
         sidecar = {
             "metadataAttributes": {
-                "document_id":   doc_id,
-                "source_type":   "sme_approved_answer",
-                "topic_ids":     topic_ids,
-                "approved_at":   approved_at_date,
-                "approved_by":   approved_by,
-                "expires_on":    expires_on,
+                "document_id": doc_id,
+                "source_type": "sme_approved_answer",
+                "topic_ids": topic_ids,
+                "approved_at": approved_at_date,
+                "approved_by": approved_by,
+                "expires_on": expires_on,
                 "question_text": question_text[:500],  # cap for sidecar size safety
             }
         }
         key = f"sme-approved/{doc_id}.md"
-        s3.put_object(Bucket=bucket, Key=key, Body=md_body.encode("utf-8"),
-                      ContentType="text/markdown")
-        s3.put_object(Bucket=bucket, Key=f"{key}.metadata.json",
-                      Body=json.dumps(sidecar).encode("utf-8"),
-                      ContentType="application/json")
+        s3.put_object(
+            Bucket=bucket, Key=key, Body=md_body.encode("utf-8"), ContentType="text/markdown"
+        )
+        s3.put_object(
+            Bucket=bucket,
+            Key=f"{key}.metadata.json",
+            Body=json.dumps(sidecar).encode("utf-8"),
+            ContentType="application/json",
+        )
         written += 1
 
     logger.info("review_api.sme_approved_written", job_id=job_id, count=written)
@@ -216,7 +237,7 @@ def approve(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
                 ExpressionAttributeValues={":t": a["answer_text"], ":e": True},
             )
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     jobs_table.update_item(
         Key={"jobId": job_id},
         UpdateExpression="SET review_status = :s, reviewed_at = :t",
@@ -265,6 +286,7 @@ def reject(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---- dispatcher ------------------------------------------------------------
+
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     method = event.get("requestContext", {}).get("http", {}).get("method", "")

@@ -7,7 +7,10 @@ Scorer: tier is class-aware — auth_* goes GREEN if any primary passage
 retrieved else AMBER; unclassified is composite-scored but capped at AMBER;
 gated defers to hard_rules for force_tier.
 """
+
 from __future__ import annotations
+
+from datetime import UTC
 
 import pytest
 
@@ -19,33 +22,32 @@ from question_classifier.dispatch import (
     get_dispatch_plan,
 )
 from shared.models import (
-    ConfidenceBreakdown,
     DispatchPlan,
     GeneratedAnswer,
     RetrievedPassage,
     Tier,
 )
 
-
 # ---------------------------------------------------------------------------
 # Dispatch: class assignment
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "topic,expected_class",
     [
-        ("soc2",               "auth_compliance"),
-        ("iso27001",           "auth_compliance"),
-        ("fedramp",            "auth_compliance"),
-        ("gdpr",               "auth_compliance"),
-        ("dpa",                "auth_compliance"),
-        ("incident_response",  "auth_compliance"),
-        ("pentest",            "auth_compliance"),
+        ("soc2", "auth_compliance"),
+        ("iso27001", "auth_compliance"),
+        ("fedramp", "auth_compliance"),
+        ("gdpr", "auth_compliance"),
+        ("dpa", "auth_compliance"),
+        ("incident_response", "auth_compliance"),
+        ("pentest", "auth_compliance"),
         ("encryption_at_rest", "auth_product"),
-        ("sso",                "auth_product"),
-        ("dr_bcp",             "auth_product"),
-        ("data_residency",     "auth_product"),
-        ("pricing",            "gated"),
+        ("sso", "auth_product"),
+        ("dr_bcp", "auth_product"),
+        ("data_residency", "auth_product"),
+        ("pricing", "gated"),
         ("customer_reference", "gated"),
     ],
 )
@@ -74,6 +76,7 @@ def test_empty_topics_returns_default() -> None:
 # ---------------------------------------------------------------------------
 # Dispatch: class merge priority
 # ---------------------------------------------------------------------------
+
 
 def test_auth_compliance_beats_auth_product_on_merge() -> None:
     plan = get_dispatch_plan(["soc2", "encryption_at_rest"])
@@ -111,6 +114,7 @@ def test_all_dispatch_table_topics_are_valid_plans() -> None:
 # Scorer: class-aware tier decision
 # ---------------------------------------------------------------------------
 
+
 def _make_generated(citations: list[str] | None = None) -> GeneratedAnswer:
     return GeneratedAnswer(
         answer_text="x",
@@ -123,16 +127,20 @@ def _make_generated(citations: list[str] | None = None) -> GeneratedAnswer:
 
 def _primary_passage(doc_id: str = "soc2_cert_2025") -> RetrievedPassage:
     return RetrievedPassage(
-        source_system="compliance", document_id=doc_id,
+        source_system="compliance",
+        document_id=doc_id,
         excerpt="SOC 2 audit covers Security and Availability.",
-        score=0.8, metadata={"updated_at": "2025-10-01"},
+        score=0.8,
+        metadata={"updated_at": "2025-10-01"},
     )
 
 
 def _prior_rfp_passage() -> RetrievedPassage:
     return RetrievedPassage(
-        source_system="historical_rfp", document_id="prior_rfp_1",
-        excerpt="prior answer text", score=0.7,
+        source_system="historical_rfp",
+        document_id="prior_rfp_1",
+        excerpt="prior answer text",
+        score=0.7,
         metadata={"approved_at": "2024-01-01"},
     )
 
@@ -160,12 +168,15 @@ def test_auth_compliance_without_primary_is_amber() -> None:
 
 def test_auth_product_with_whitepaper_primary_is_green() -> None:
     p = RetrievedPassage(
-        source_system="whitepaper", document_id="encryption_whitepaper",
-        excerpt="AES-256-GCM at rest.", score=0.9,
+        source_system="whitepaper",
+        document_id="encryption_whitepaper",
+        excerpt="AES-256-GCM at rest.",
+        score=0.9,
         metadata={"updated_at": "2025-09-01"},
     )
     _, _, tier = score(
-        passages=[p], prior_matches=[],
+        passages=[p],
+        prior_matches=[],
         generated=_make_generated(citations=["encryption_whitepaper"]),
         topic_class="auth_product",
     )
@@ -174,7 +185,9 @@ def test_auth_product_with_whitepaper_primary_is_green() -> None:
 
 def test_auth_product_with_no_passages_is_amber() -> None:
     _, _, tier = score(
-        passages=[], prior_matches=[], generated=_make_generated(),
+        passages=[],
+        prior_matches=[],
+        generated=_make_generated(),
         topic_class="auth_product",
     )
     assert tier == Tier.AMBER
@@ -186,16 +199,24 @@ def test_unclassified_green_composite_is_capped_at_amber() -> None:
     the answer."""
     # Craft inputs that would yield composite >= 0.80 normally.
     p = RetrievedPassage(
-        source_system="seismic", document_id="seismic_card",
-        excerpt="sales deck content", score=1.0,
+        source_system="seismic",
+        document_id="seismic_card",
+        excerpt="sales deck content",
+        score=1.0,
         metadata={"updated_at": "2026-03-01"},
     )
     prior = _prior_rfp_passage()  # only for C contribution
+    from datetime import datetime
+
     from shared.models import PriorAnswerMatch
-    from datetime import datetime, timezone
+
     m = PriorAnswerMatch(
-        answer_id="m1", question_text="q", answer_text="a", similarity=1.0,
-        approved_by="sme", approved_at=datetime.now(timezone.utc),
+        answer_id="m1",
+        question_text="q",
+        answer_text="a",
+        similarity=1.0,
+        approved_by="sme",
+        approved_at=datetime.now(UTC),
     )
     _, breakdown, tier = score(
         passages=[p, prior],
@@ -210,7 +231,9 @@ def test_unclassified_green_composite_is_capped_at_amber() -> None:
 
 def test_unclassified_weak_composite_is_red() -> None:
     _, _, tier = score(
-        passages=[], prior_matches=[], generated=_make_generated(),
+        passages=[],
+        prior_matches=[],
+        generated=_make_generated(),
         topic_class="unclassified",
     )
     assert tier == Tier.RED
@@ -220,7 +243,9 @@ def test_gated_tier_is_composite_placeholder() -> None:
     """Gated class doesn't get special tier handling in the scorer — hard_rules
     runs after and overrides with force_tier for pricing."""
     _, _, tier = score(
-        passages=[], prior_matches=[], generated=_make_generated(),
+        passages=[],
+        prior_matches=[],
+        generated=_make_generated(),
         topic_class="gated",
     )
     # Empty passages → composite ~0 → RED by default.
@@ -229,18 +254,28 @@ def test_gated_tier_is_composite_placeholder() -> None:
 
 def test_topic_class_defaults_to_unclassified() -> None:
     """When topic_class is omitted, falls back to unclassified (capped at amber)."""
+    from datetime import datetime
+
     from shared.models import PriorAnswerMatch
-    from datetime import datetime, timezone
+
     p = RetrievedPassage(
-        source_system="compliance", document_id="x", excerpt="y", score=1.0,
+        source_system="compliance",
+        document_id="x",
+        excerpt="y",
+        score=1.0,
         metadata={"updated_at": "2026-03-01"},
     )
     m = PriorAnswerMatch(
-        answer_id="m1", question_text="q", answer_text="a", similarity=1.0,
-        approved_by="sme", approved_at=datetime.now(timezone.utc),
+        answer_id="m1",
+        question_text="q",
+        answer_text="a",
+        similarity=1.0,
+        approved_by="sme",
+        approved_at=datetime.now(UTC),
     )
     _, _, tier = score(
-        passages=[p], prior_matches=[m],
+        passages=[p],
+        prior_matches=[m],
         generated=_make_generated(citations=["x"]),
     )
     # Default unclassified + strong signals → would be green, capped to amber.

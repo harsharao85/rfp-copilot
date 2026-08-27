@@ -4,20 +4,23 @@ version = "0.1.0"
 description = "Python Lambda sources for the RFP Redlining Copilot"
 requires-python = ">=3.12"
 dependencies = [
-    "openpyxl>=3.1.2",
-    "boto3>=1.34.0",
-    "pydantic>=2.5.0",
-    "structlog>=24.1.0",
+    "openpyxl>=3.1.2,<4",
+    "boto3>=1.34.0,<2",
+    "pydantic>=2.5.0,<3",
+    "structlog>=24.1.0,<27",
 ]
 
 [project.optional-dependencies]
+# Upper bounds on the toolchain, not just the runtime. ruff and mypy change
+# what they flag between minor releases, so an unpinned floor means CI can go
+# red on a commit that changed nothing. Raise these deliberately.
 dev = [
-    "pytest>=8.0.0",
-    "pytest-cov>=5.0.0",
-    "ruff>=0.4.0",
-    "mypy>=1.10.0",
+    "pytest>=8.0.0,<10",
+    "pytest-cov>=5.0.0,<8",
+    "ruff>=0.16.0,<0.17",
+    "mypy>=2.3.0,<3",
     "types-openpyxl",
-    "moto[s3,dynamodb]>=5.0.0",
+    "moto[s3,dynamodb]>=5.0.0,<6",
 ]
 
 [tool.setuptools.packages.find]
@@ -32,10 +35,23 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B", "UP", "N", "S", "T20", "RET", "SIM", "ARG"]
-ignore = ["S101"]  # asserts OK in tests
+ignore = [
+    "S101",   # asserts OK in tests
+    # UP042 wants `class Tier(StrEnum)` in place of `class Tier(str, Enum)`.
+    # The two are not interchangeable: str(Tier.RED) is "Tier.RED" under
+    # str+Enum and "red" under StrEnum. Tier values are written to DynamoDB,
+    # returned in Step Functions payloads and compared in the hard-rule
+    # engine, so switching is a serialisation change disguised as a lint fix.
+    # Deliberately deferred — it needs its own commit and its own test pass.
+    "UP042",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S", "ARG"]
+# Mock Seismic/Gong fixtures: one long excerpt string per record, where
+# wrapping costs more readability than it buys, and an unseeded RNG that
+# exists precisely to make latency and errors non-deterministic for demos.
+"mock_sources/handler.py" = ["E501", "S311"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -43,6 +59,23 @@ strict = true
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# Each Lambda package is its own sys.path root at runtime, which is why the
+# handlers import their siblings flat (`from rules import ...`). mypy cannot
+# resolve those without putting every package dir on its search path, which
+# then makes it see the same handler.py under two module names. Treating the
+# five flat names as untyped imports is the cheaper trade: it costs type
+# checking across five module boundaries, not inside them.
+module = ["rules", "writer", "parser", "scorer", "dispatch"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Neither boto3 nor botocore ships a py.typed marker, and the generated
+# boto3-stubs packages are per-service and heavy. Typing our own use of them
+# is what matters; the SDK's internals are not our contract.
+module = ["boto3.*", "botocore.*", "moto.*", "structlog.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -34,13 +34,15 @@ a tier, or decide what to do. That is done by the deterministic matrix in
 the pipeline's existing rule that no tier is ever set by an LLM's own
 assessment of its work.
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
 from itertools import combinations
-from typing import Callable, Iterable, Sequence
+from typing import Any
 
 from shared.models import Tier
 from shared.provenance import Provenance
@@ -69,8 +71,8 @@ class ClaimRelation(str, Enum):
 
     AGREE = "agree"
     CONTRADICT = "contradict"
-    UNRELATED = "unrelated"      # different sub-topics; not comparable
-    UNCERTAIN = "uncertain"      # model declined to call it
+    UNRELATED = "unrelated"  # different sub-topics; not comparable
+    UNCERTAIN = "uncertain"  # model declined to call it
 
 
 class DivergenceKind(str, Enum):
@@ -139,7 +141,7 @@ class DivergenceReport:
         return Tier.AMBER
 
     @property
-    def summary(self) -> dict:
+    def summary(self) -> dict[str, Any]:
         by_kind: dict[str, int] = {}
         for f in self.findings:
             by_kind[f.kind.value] = by_kind.get(f.kind.value, 0) + 1
@@ -195,14 +197,15 @@ class DivergenceDetector:
 
         if relation is ClaimRelation.CONTRADICT:
             same_customer = (
-                left.customer_key is not None
-                and left.customer_key == right.customer_key
+                left.customer_key is not None and left.customer_key == right.customer_key
             )
             if same_customer:
                 return DivergenceFinding(
                     kind=DivergenceKind.SELF_CONTRADICTION,
                     tier_floor=SEVERITY[DivergenceKind.SELF_CONTRADICTION],
-                    left=left, right=right, days_apart=days_apart,
+                    left=left,
+                    right=right,
+                    days_apart=days_apart,
                     detail=(
                         f"{self._who(left)} received contradictory answers to this "
                         f"question {self._gap(days_apart)}. Both statements are in "
@@ -214,7 +217,9 @@ class DivergenceDetector:
                 return DivergenceFinding(
                     kind=DivergenceKind.CUSTOMER_DIVERGENCE,
                     tier_floor=SEVERITY[DivergenceKind.CUSTOMER_DIVERGENCE],
-                    left=left, right=right, days_apart=days_apart,
+                    left=left,
+                    right=right,
+                    days_apart=days_apart,
                     detail=(
                         f"{self._who(left)} and {self._who(right)} were given "
                         f"contradictory answers {self._gap(days_apart)} — within the "
@@ -226,7 +231,9 @@ class DivergenceDetector:
             return DivergenceFinding(
                 kind=DivergenceKind.UNRESOLVED_DIVERGENCE,
                 tier_floor=SEVERITY[DivergenceKind.UNRESOLVED_DIVERGENCE],
-                left=left, right=right, days_apart=days_apart,
+                left=left,
+                right=right,
+                days_apart=days_apart,
                 detail=(
                     f"{self._who(left)} and {self._who(right)} were given differing "
                     f"answers {self._gap(days_apart)}. Could be the control "
@@ -241,7 +248,9 @@ class DivergenceDetector:
             return DivergenceFinding(
                 kind=DivergenceKind.UNRESOLVED_DIVERGENCE,
                 tier_floor=SEVERITY[DivergenceKind.UNRESOLVED_DIVERGENCE],
-                left=left, right=right, days_apart=days_apart,
+                left=left,
+                right=right,
+                days_apart=days_apart,
                 detail=(
                     f"Could not determine whether the answers given to "
                     f"{self._who(left)} and {self._who(right)} are consistent. "
@@ -263,17 +272,14 @@ class DivergenceDetector:
 
         ordered = sorted(
             statements,
-            key=lambda s: s.provenance.answered_at or s.provenance.approved_at
-            or _EPOCH,
+            key=lambda s: s.provenance.answered_at or s.provenance.approved_at or _EPOCH,
             reverse=True,
         )
 
         for left, right in self._pairs(ordered):
             report.compared_pairs += 1
             try:
-                relation = self._compare(
-                    left.question_text, left.answer_text, right.answer_text
-                )
+                relation = self._compare(left.question_text, left.answer_text, right.answer_text)
             except Exception:  # noqa: BLE001
                 # A comparator failure must not silently read as agreement.
                 relation = ClaimRelation.UNCERTAIN
@@ -290,11 +296,9 @@ class DivergenceDetector:
     def _pairs(
         self, ordered: Sequence[PriorStatement]
     ) -> Iterable[tuple[PriorStatement, PriorStatement]]:
-        count = 0
-        for pair in combinations(ordered, 2):
+        for count, pair in enumerate(combinations(ordered, 2)):
             if count >= self._max_pairs:
                 return
-            count += 1
             yield pair
 
     @staticmethod
@@ -316,7 +320,8 @@ class DivergenceDetector:
             DivergenceFinding(
                 kind=DivergenceKind.STALE_CONSENSUS,
                 tier_floor=SEVERITY[DivergenceKind.STALE_CONSENSUS],
-                left=newest, right=newest,
+                left=newest,
+                right=newest,
                 detail=(
                     f"All {len(statements)} prior answer(s) are consistent but every "
                     f"one has expired. Re-confirm with the control owner before "
@@ -352,6 +357,6 @@ class DivergenceDetector:
         return f"about {round(days / 365)} years apart"
 
 
-from datetime import datetime, timezone  # noqa: E402  (used only as a sort floor)
+from datetime import UTC, datetime  # noqa: E402  (used only as a sort floor)
 
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)

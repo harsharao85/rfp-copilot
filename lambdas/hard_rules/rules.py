@@ -22,6 +22,7 @@ no tier here is ever set by a model's own assessment of its work.
 The rule set version is stamped on every audit record so we know
 which policy was in effect when an answer was generated.
 """
+
 from __future__ import annotations
 
 import re
@@ -40,13 +41,19 @@ RULES_VERSION = "2026-08-27"
 
 PRICING_PATTERNS = [
     re.compile(r"\$\s?\d[\d,]*(\.\d{2})?", re.IGNORECASE),
-    re.compile(r"\b(price|pricing|cost|fee|subscription|per[- ]seat|per[- ]user|annual\s+contract)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(price|pricing|cost|fee|subscription|per[- ]seat|per[- ]user|annual\s+contract)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b(discount|rebate|volume\s+discount)\b", re.IGNORECASE),
     re.compile(r"\b(\d+)\s*%\s*(off|discount)", re.IGNORECASE),
 ]
 
 COMPLIANCE_PATTERNS = [
-    re.compile(r"\b(SOC\s*2|SOC\s*1|ISO\s*27001|ISO\s*9001|FedRAMP|HIPAA|PCI[-\s]?DSS|GDPR|CCPA|HITRUST)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(SOC\s*2|SOC\s*1|ISO\s*27001|ISO\s*9001|FedRAMP|HIPAA|PCI[-\s]?DSS|GDPR|CCPA|HITRUST)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b(compliant|certif(y|ied|ication)|attestation|audit(ed)?)\b", re.IGNORECASE),
 ]
 
@@ -59,7 +66,9 @@ FORWARD_LOOKING_PATTERNS = [
 SLA_PATTERNS = [
     re.compile(r"\b\d{1,2}(\.\d+)?\s*%\s+uptime\b", re.IGNORECASE),
     re.compile(r"\b(RTO|RPO|MTTR|MTBF)\b", re.IGNORECASE),
-    re.compile(r"\b\d+\s*(hour|minute|second|day)s?\s+(response|resolution|recovery)\b", re.IGNORECASE),
+    re.compile(
+        r"\b\d+\s*(hour|minute|second|day)s?\s+(response|resolution|recovery)\b", re.IGNORECASE
+    ),
 ]
 
 COMPETITOR_DISPARAGEMENT_PATTERNS = [

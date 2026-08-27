@@ -22,6 +22,7 @@ is sorted before it reaches the cache, so the reversed pair is free. Sorting
 also makes the result independent of the order the detector happened to walk
 the pairs in, which is one less thing to explain to an auditor.
 """
+
 from __future__ import annotations
 
 import functools
@@ -128,8 +129,8 @@ class BedrockComparator:
         self._model_id = model_id
         self._max_tokens = max_tokens
         self._temperature = temperature
-        self.calls = 0          # model calls actually issued
-        self.errors = 0         # calls that failed and degraded to UNCERTAIN
+        self.calls = 0  # model calls actually issued
+        self.errors = 0  # calls that failed and degraded to UNCERTAIN
         # Bounded deliberately: entries hold the prompt text, so an unbounded
         # cache is a slow memory leak in a warm Lambda execution context.
         self._cached = functools.lru_cache(maxsize=cache_size)(self._compare)
