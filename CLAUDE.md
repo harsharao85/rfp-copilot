@@ -2,6 +2,58 @@
 
 You are helping **H** (AWS SAA-C03 & AIF-C01 certified, prepping SAP-C02, targeting Solutions Consultant roles) build and deploy this project. The architectural design evolved across several Cowork sessions and has been consolidated to a demo-tier architecture (v0.5). This file is the handoff contract. **Read `docs/architecture.md` before making any non-trivial architectural change.** Prior designs are archived under `docs/archive/`.
 
+---
+
+## STATUS — this repo is being repurposed (read this first)
+
+**As of 27 Aug 2026 this repo is the build repo for the Echoworx inbound security-questionnaire
+PoC, tracked in Notion as engagement `ENG-2`.** It is no longer the sales-side RFP redlining
+demo, even though most of this file still describes that.
+
+**Precedence when documents disagree:**
+
+1. `HANDOFF.md` — locked decisions for the Echoworx repurposing. Wins on scope, orchestration,
+   region, redaction posture and the AgentCore question.
+2. `docs/echoworx-poc-repurposing-plan.md` — the reasoning behind those decisions, with AWS
+   facts verified 26 Aug 2026. Re-verify anything going in front of a customer.
+3. This file — still authoritative on the **codebase**: the confidence composite, the hard-rules
+   engine, the class-based dispatch, the KB/S3 Vectors retrieval surface, deployment mechanics
+   and the "do not modify logic" markers. All of that carries forward unchanged.
+4. `docs/architecture.md` — v0.5 design contract for the existing pipeline.
+
+**Two corrections to what follows.** The v0.5 text below is otherwise accurate and stays.
+
+- *"Bedrock Agents / AgentCore — out of scope"* (under **What's explicitly out of scope**) **is
+  reversed** for this engagement. Per `HANDOFF.md` §2.1, Step Functions remains the orchestrator
+  — that part is unchanged and non-negotiable — but AgentCore is used *inside* it in three
+  bounded places: Gateway (sources as MCP tools, with Guardrails enforced outside agent code),
+  the managed harness inside the Map state for classifier-flagged multi-hop questions only, and
+  Evaluations for ground-truth accuracy. Memory, Code Interpreter, Agent Registry, payments, Web
+  Search and Browser stay out. Identity is phase 2.
+- *"Distributed Map — deferred"* **is reversed.** Real questionnaires run from ~250 (CAIQ) into
+  the low thousands (SIG); plain `Map` at concurrency 10 does not reach that. Distributed Map and
+  a topic-batched SME review gate are now `UOW-5`, not a scale-up note.
+
+**Unchanged and load-bearing:** tiering is never set by a model. `confidence_scorer` and
+`hard_rules` stay deterministic Lambdas. This mattered for the RFP tool; it matters more here,
+because the buyer *is* a compliance function and the output gets audited.
+
+## PoC Factory governance
+
+This repo carries the VeUP PoC Factory scaffold. Nine agents in `.claude/agents/`, the gate
+contract in `docs/factory/gates.md`, the Notion contract in `docs/factory/notion-schema.md`.
+
+**Gates are real.** Work is blocked behind a human verdict recorded in Notion — no agent ever
+sets one. `.claude/hooks/gate_guard.py` enforces G4 mechanically and fails closed, so
+`cdk deploy` will refuse to run until G4 Deploy Approval is `Approved` for `ENG-2`. `cdk synth`
+and `cdk diff` are always allowed.
+
+The agent files were **reconstructed on 27 Aug 2026** from the gate and schema contracts after
+the canonical bundle was lost in a skill sync. Diff them against the originals before treating
+their wording as authoritative.
+
+---
+
 ## What this project is
 
 A Sales-facing AWS workflow that takes an incoming RFP/RFI Excel, auto-answers questions with citations, scores each answer's confidence via a composite algorithm, applies enterprise-legal hard rules, and returns the same Excel with color-coded highlights (green / amber / red) for rep and SME review. A flywheel captures SME approvals with corroboration provenance so the library self-cleans as authoritative sources evolve.
@@ -104,9 +156,9 @@ Index must declare `AMAZON_BEDROCK_TEXT` and `AMAZON_BEDROCK_METADATA` as `nonFi
 - **OpenSearch Serverless (AOSS).** Documented as the next-tier vector store above S3 Vectors; triggered by sustained QPS > ~5 or corpus > ~100k docs. Not for demo.
 - **Amazon Neptune.** Demo uses DynamoDB for Customer References and the Prior RFPs library metadata. Documented as scale-up when multi-hop queries emerge.
 - **VPC + PrivateLink.** Demo runs Lambdas outside VPC. Documented as production hardening.
-- **Distributed Map.** Plain `Map` at 10x concurrency handles 30-question demos. Distributed Map is documented as the 500-question scale-up.
+- **Distributed Map.** ~~Deferred~~ — **reversed for ENG-2 (UOW-5).** Plain `Map` at 10x concurrency handles 30-question demos; CAIQ v4 is ~250 questions and SIG runs into the thousands.
 - **Q Business.** Documented as the "interactive rep-facing chat" scale-up.
-- **Bedrock Agents / AgentCore.** Deliberate determinism — see `docs/architecture.md` §15 for the reasoning and when to add agents.
+- **Bedrock Agents / AgentCore.** ~~Deliberate determinism~~ — **reversed for ENG-2; see the STATUS section above and `HANDOFF.md` §2.1.** The determinism argument still holds for the orchestrator (Step Functions stays), but AgentCore Gateway, the in-Map harness and Evaluations are in scope. Original reasoning: `docs/architecture.md` §15.
 - **React SME review UI polish.** A minimal working UI is in scope; heavy polish is deferred.
 
 ## Current status (v0.5 deployed, 2026-04-19 — post Phase G)

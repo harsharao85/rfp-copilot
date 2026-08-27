@@ -1,0 +1,23 @@
+{
+  "$comment": "PoC Factory gate wiring. RECONSTRUCTED 2026-08-27 — the original .claude/settings.json was lost in a skill sync.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/gate_guard.py\""
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./**/*.pem)",
+      "Read(./**/credentials)"
+    ]
+  }
+}
