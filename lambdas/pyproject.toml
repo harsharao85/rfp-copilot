@@ -21,6 +21,10 @@ dev = [
     "mypy>=2.3.0,<3",
     "types-openpyxl",
     "moto[s3,dynamodb]>=5.0.0,<6",
+    # Used by scripts/generate_corpus_documents.py to build the synthetic
+    # compliance PDFs. Not a Lambda runtime dependency, but verify_fixture.py
+    # and e2e_local.py both import that module, so the dev install needs it.
+    "reportlab>=4.0,<5",
 ]
 
 [tool.setuptools.packages.find]
